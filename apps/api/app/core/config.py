@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     clickhouse_host: str = "localhost"
     clickhouse_port: int = 8123
     clickhouse_database: str = "dataforge"
+    groq_api_key: str = ""
+    model_name: str = "llama-3.3-70b-versatile"
 
     class Config:
         env_file = ".env"
