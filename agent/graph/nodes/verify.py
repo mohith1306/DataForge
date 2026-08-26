@@ -16,13 +16,30 @@ async def verify_remediation(state: dict) -> dict:
     try:
         dq_result = await check_data_quality(state.get("incident_type", "unknown"))
         dq_findings = dq_result.get("findings", [])
+        dq_errors = dq_result.get("errors", [])
 
+        # Add each finding with unique metric key
         for f in dq_findings:
+            metric_key = f["type"]
+            # Make completeness keys unique per table.column
+            if f["type"] == "completeness":
+                data = f.get("data", {})
+                metric_key = f"completeness_{data.get('table', '')}_{data.get('column', '')}"
+
             verification_results.append({
-                "metric": f"{f['type']}",
-                "before": _get_before_value(f["type"], state),
+                "metric": metric_key,
+                "before": _get_before_value(f["type"], f.get("data", {}), state),
                 "after": f["summary"],
                 "status": "resolved" if f.get("passed") else "unresolved",
+            })
+
+        # Include DQ errors as unresolved checks
+        for err_msg in dq_errors:
+            verification_results.append({
+                "metric": f"dq_error_{len(verification_results)}",
+                "before": "unknown",
+                "after": f"ERROR: {err_msg}",
+                "status": "error",
             })
     except Exception as e:
         logger.error(f"Data quality check failed: {e}")
@@ -88,7 +105,7 @@ async def verify_remediation(state: dict) -> dict:
     }
 
 
-def _get_before_value(metric_type: str, state: dict) -> str:
+def _get_before_value(metric_type: str, data: dict, state: dict) -> str:
     """Get the before value from incident context."""
     evidence = state.get("evidence", [])
 
@@ -98,7 +115,7 @@ def _get_before_value(metric_type: str, state: dict) -> str:
             content = e.get("content", {})
             if metric_type == "freshness" and "latest_date" in content:
                 return f"latest={content['latest_date']}"
-            if metric_type == "completeness" and "null_rate" in content:
+            if metric_type.startswith("completeness") and "null_rate" in content:
                 return f"null_rate={content['null_rate']:.1%}"
             if metric_type == "uniqueness" and "duplicate_rate" in content:
                 return f"dup_rate={content['duplicate_rate']:.1%}"
@@ -117,4 +134,8 @@ def _get_before_value(metric_type: str, state: dict) -> str:
         "distribution": "imbalanced",
         "pipeline_health": "FAILED",
     }
-    return defaults.get(metric_type, "unknown")
+    # Match prefix for completeness_*
+    for key, val in defaults.items():
+        if metric_type.startswith(key):
+            return val
+    return "unknown"

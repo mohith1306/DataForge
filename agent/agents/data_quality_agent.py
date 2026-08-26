@@ -44,23 +44,33 @@ async def check_data_quality(incident_type: str = "unknown") -> dict:
     ]:
         try:
             profile = await profile_column(table, column)
-            completeness = 1.0 - profile.get("null_rate", 0)
-            passed = completeness > 0.95
-            findings.append({
-                "type": "completeness",
-                "data": {
-                    "table": table,
-                    "column": column,
-                    "completeness": round(completeness, 4),
-                    "null_rate": round(profile.get("null_rate", 0), 4),
-                },
-                "summary": (
-                    f"{table}.{column}: completeness={completeness:.1%}, "
-                    f"null_rate={profile.get('null_rate', 0):.1%} — "
-                    f"{'OK' if passed else 'DEGRADED'}"
-                ),
-                "passed": passed,
-            })
+            # Check if profile returned an error
+            if "error" in profile:
+                findings.append({
+                    "type": "completeness",
+                    "data": {"table": table, "column": column, "error": profile["error"]},
+                    "summary": f"{table}.{column}: profile check FAILED — {profile['error']}",
+                    "passed": False,
+                })
+            else:
+                null_rate = profile.get("null_rate", 0)
+                completeness = 1.0 - null_rate
+                passed = completeness > 0.95
+                findings.append({
+                    "type": "completeness",
+                    "data": {
+                        "table": table,
+                        "column": column,
+                        "completeness": round(completeness, 4),
+                        "null_rate": round(null_rate, 4),
+                    },
+                    "summary": (
+                        f"{table}.{column}: completeness={completeness:.1%}, "
+                        f"null_rate={null_rate:.1%} — "
+                        f"{'OK' if passed else 'DEGRADED'}"
+                    ),
+                    "passed": passed,
+                })
         except Exception as e:
             errors.append(f"Completeness check for {table}.{column} failed: {e}")
 
@@ -88,19 +98,23 @@ async def check_data_quality(incident_type: str = "unknown") -> dict:
     except Exception as e:
         errors.append(f"Uniqueness check failed: {e}")
 
-    # 4. Volume check
+    # 4. Volume check — use calendar days (not just days with data)
     try:
         result = await execute_select(
-            "SELECT toDate(order_date) as day, count() as cnt "
-            "FROM dataforge.customer_orders "
-            "GROUP BY day ORDER BY day DESC LIMIT 7"
+            "SELECT day, ifNull(cnt, 0) as cnt FROM "
+            "(SELECT arrayMap(x -> today() - x, range(7)) as days) "
+            "ARRAY JOIN days as day "
+            "LEFT JOIN "
+            "(SELECT toDate(order_date) as day, count() as cnt "
+            "FROM dataforge.customer_orders GROUP BY day) AS d USING (day) "
+            "ORDER BY day DESC"
         )
         rows = result.get("rows", [])
         if rows:
             counts = [r.get("cnt", 0) for r in rows]
             avg = sum(counts) / len(counts) if counts else 0
             min_count = min(counts) if counts else 0
-            # Check if any day is below 50% of average
+            zero_days = sum(1 for c in counts if c == 0)
             volume_ok = min_count > avg * 0.5 if avg > 0 else True
             findings.append({
                 "type": "volume",
@@ -108,9 +122,11 @@ async def check_data_quality(incident_type: str = "unknown") -> dict:
                     "daily_counts": counts,
                     "average": round(avg, 1),
                     "min": min_count,
+                    "zero_days": zero_days,
                 },
                 "summary": (
-                    f"Volume (7d): avg={avg:.0f}, min={min_count}, "
+                    f"Volume (7d calendar): avg={avg:.0f}, min={min_count}, "
+                    f"{zero_days} empty days — "
                     f"{'STABLE' if volume_ok else 'VOLUME DROP DETECTED'}"
                 ),
                 "passed": volume_ok,

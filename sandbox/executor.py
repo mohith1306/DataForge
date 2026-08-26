@@ -11,22 +11,59 @@ logger = logging.getLogger(__name__)
 # Maximum execution time in seconds
 MAX_EXECUTION_TIME = 30
 
-# Forbidden imports for sandbox safety
-FORBIDDEN_IMPORTS = {
-    "subprocess", "os", "shutil", "pathlib", "socket",
-    "http", "urllib", "requests", "asyncio",
-    "ctypes", "importlib", "sys",
+# Only truly safe builtins
+SAFE_BUILTINS = {
+    "print": print,
+    "len": len,
+    "range": range,
+    "int": int,
+    "float": float,
+    "str": str,
+    "bool": bool,
+    "list": list,
+    "dict": dict,
+    "set": set,
+    "tuple": tuple,
+    "type": type,
+    "isinstance": isinstance,
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "abs": abs,
+    "round": round,
+    "sorted": sorted,
+    "reversed": reversed,
+    "enumerate": enumerate,
+    "zip": zip,
+    "map": map,
+    "filter": filter,
+    "any": any,
+    "all": all,
+    "True": True,
+    "False": False,
+    "None": None,
+    "Exception": Exception,
+    "ValueError": ValueError,
+    "TypeError": TypeError,
+    "KeyError": KeyError,
+    "IndexError": IndexError,
+    "ZeroDivisionError": ZeroDivisionError,
+    "__import__": None,  # Placeholder, replaced below
 }
 
-# Builtins that are safe to use
-SAFE_BUILTINS = {
-    "print", "len", "range", "int", "float", "str", "bool",
-    "list", "dict", "set", "tuple", "type", "isinstance",
-    "min", "max", "sum", "abs", "round", "sorted", "reversed",
-    "enumerate", "zip", "map", "filter", "any", "all",
-    "True", "False", "None",
-    "Exception", "ValueError", "TypeError", "KeyError", "IndexError",
-}
+
+def _safe_import(name: str, *args: Any, **kwargs: Any) -> Any:
+    """Restricted import that only allows safe modules."""
+    allowed_modules = {"math", "json", "statistics", "datetime", "collections", "re"}
+    if name in allowed_modules:
+        import importlib
+        return importlib.import_module(name)
+    raise ImportError(f"Import '{name}' is not allowed in sandbox")
+
+
+# Set up safe builtins with restricted import
+_sandbox_builtins = dict(SAFE_BUILTINS)
+_sandbox_builtins["__import__"] = _safe_import
 
 
 class SandboxError(Exception):
@@ -35,16 +72,14 @@ class SandboxError(Exception):
 
 
 async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> dict:
-    """Execute Python analysis code in a sandboxed environment.
+    """Execute Python analysis code in a sandboxed environment with timeout.
 
     The code runs with:
-    - Restricted imports (no os, subprocess, etc.)
-    - Timeout protection
+    - Restricted builtins (no open, eval, exec, compile)
+    - Only safe imports (math, json, statistics, datetime, collections, re)
+    - Async timeout protection
     - Captured stdout
     - Optional context variables
-
-    Returns:
-        dict with keys: result, output, error, execution_time
     """
     if not code or not code.strip():
         return {
@@ -55,16 +90,7 @@ async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> 
         }
 
     # Prepare execution environment
-    exec_context: dict[str, Any] = {
-        "__builtins__": {
-            k: v for k, v in __builtins__.__dict__.items()
-            if k in SAFE_BUILTINS or k.startswith("__") is False
-        } if isinstance(__builtins__, dict) else {
-            k: getattr(__builtins__, k)
-            for k in SAFE_BUILTINS
-            if hasattr(__builtins__, k)
-        },
-    }
+    exec_context: dict[str, Any] = {"__builtins__": _sandbox_builtins}
 
     # Add safe data from context
     if context:
@@ -72,7 +98,7 @@ async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> 
             if not k.startswith("_"):
                 exec_context[k] = v
 
-    # Add pandas/numpy if available (common for data analysis)
+    # Add pandas/numpy if available
     try:
         import pandas as pd
         exec_context["pd"] = pd
@@ -85,34 +111,54 @@ async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> 
     except ImportError:
         pass
 
-    # Capture stdout
     stdout_capture = io.StringIO()
     start_time = asyncio.get_event_loop().time()
 
+    async def _run_exec() -> tuple[Any, str]:
+        """Run exec in a thread to allow timeout."""
+        import concurrent.futures
+
+        loop = asyncio.get_event_loop()
+
+        def _sync_exec() -> tuple[Any, str]:
+            with redirect_stdout(stdout_capture):
+                exec(code, exec_context)
+                result = exec_context.get("result", None)
+                return result, stdout_capture.getvalue()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = loop.run_in_executor(pool, _sync_exec)
+            try:
+                return await asyncio.wait_for(future, timeout=MAX_EXECUTION_TIME)
+            except TimeoutError as err:
+                future.cancel()
+                raise SandboxError(
+                    f"Execution timed out after {MAX_EXECUTION_TIME}s"
+                ) from err
+
     try:
-        with redirect_stdout(stdout_capture):
-            # Execute with timeout
-            exec_globals = exec_context
-            exec(code, exec_globals)
+        result, output = await _run_exec()
+        exec_time = asyncio.get_event_loop().time() - start_time
+        return {
+            "result": result,
+            "output": output,
+            "error": None,
+            "execution_time": round(exec_time, 3),
+        }
 
-            # If code defines a 'result' variable, return it
-            result = exec_globals.get("result", None)
-            output = stdout_capture.getvalue()
-            exec_time = asyncio.get_event_loop().time() - start_time
-
-            return {
-                "result": result,
-                "output": output,
-                "error": None,
-                "execution_time": round(exec_time, 3),
-            }
-
-    except Exception as e:
-        output = stdout_capture.getvalue()
+    except SandboxError as e:
         exec_time = asyncio.get_event_loop().time() - start_time
         return {
             "result": None,
-            "output": output,
+            "output": stdout_capture.getvalue(),
+            "error": str(e),
+            "execution_time": round(exec_time, 3),
+        }
+    except Exception as e:
+        exec_time = asyncio.get_event_loop().time() - start_time
+        return {
+            "result": None,
+            "output": stdout_capture.getvalue(),
             "error": f"{type(e).__name__}: {e}",
             "execution_time": round(exec_time, 3),
         }
@@ -121,61 +167,24 @@ async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> 
 async def generate_analysis_code(
     incident_type: str, evidence_summary: str
 ) -> str:
-    """Generate Python analysis code for the given incident.
-
-    Returns code that can be executed in the sandbox.
-    """
-    # Pre-built analysis templates for common incident types
+    """Generate Python analysis code for the given incident."""
     templates = {
-        "schema_drift": '''
-# Schema Drift Analysis
-import json
-
-# Analyze the impact of schema changes
-results = {
-    "analysis_type": "schema_drift",
-    "findings": [],
-}
-
-# Check for null rate changes
-results["findings"].append({
-    "metric": "null_rate_change",
-    "description": "Schema drift caused null rate increase in customer_region",
-    "severity": "high",
-})
-
-# Revenue impact
-results["findings"].append({
-    "metric": "revenue_impact",
-    "description": "APAC revenue dropped 42% due to schema regression",
-    "severity": "critical",
-})
-
-result = results
-print(f"Schema drift analysis complete: {len(results['findings'])} findings")
-''',
-        "pipeline_failure": '''
-# Pipeline Failure Analysis
-results = {
-    "analysis_type": "pipeline_failure",
-    "findings": [],
-}
-
-results["findings"].append({
-    "metric": "pipeline_status",
-    "description": "Pipeline PL-001 failed due to invalid enum value",
-    "severity": "high",
-})
-
-results["findings"].append({
-    "metric": "error_frequency",
-    "description": "Pipeline failures increased in last 3 days",
-    "severity": "medium",
-})
-
-result = results
-print(f"Pipeline failure analysis: {len(results['findings'])} findings")
-''',
+        "schema_drift": (
+            "import json\n"
+            "results = {'analysis_type': 'schema_drift', 'findings': []}\n"
+            "results['findings'].append({'metric': 'null_rate_change', "
+            "'description': 'Schema drift caused null rate increase', 'severity': 'high'})\n"
+            "results['findings'].append({'metric': 'revenue_impact', "
+            "'description': 'APAC revenue dropped 42%%', 'severity': 'critical'})\n"
+            "result = results\n"
+            "print(f'Schema drift analysis: {len(results[\"findings\"])} findings')\n"
+        ),
+        "pipeline_failure": (
+            "results = {'analysis_type': 'pipeline_failure', 'findings': []}\n"
+            "results['findings'].append({'metric': 'pipeline_status', "
+            "'description': 'Pipeline PL-001 failed', 'severity': 'high'})\n"
+            "result = results\n"
+            "print(f'Pipeline failure analysis: {len(results[\"findings\"])} findings')\n"
+        ),
     }
-
     return templates.get(incident_type, templates["schema_drift"])

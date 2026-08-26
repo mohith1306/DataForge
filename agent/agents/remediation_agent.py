@@ -79,7 +79,29 @@ async def plan_remediation(state: dict) -> dict:
         logger.error(f"LLM remediation planning failed: {e}, using heuristic")
         parsed = _heuristic_plan(incident_type, root_cause)
 
-    actions = parsed.get("actions", [])
+    # Validate parsed structure
+    if not isinstance(parsed, dict):
+        logger.warning("LLM returned non-dict, using heuristic plan")
+        parsed = _heuristic_plan(incident_type, root_cause)
+
+    raw_actions = parsed.get("actions", [])
+    if not isinstance(raw_actions, list):
+        logger.warning("LLM actions is not a list, using heuristic plan")
+        parsed = _heuristic_plan(incident_type, root_cause)
+        raw_actions = parsed.get("actions", [])
+
+    # Validate each action has required fields
+    actions = []
+    for a in raw_actions:
+        if isinstance(a, dict) and "tool" in a:
+            actions.append(a)
+        else:
+            logger.warning(f"Skipping malformed action: {a}")
+
+    if not actions:
+        logger.warning("No valid actions from LLM, using heuristic plan")
+        parsed = _heuristic_plan(incident_type, root_cause)
+        actions = parsed.get("actions", [])
 
     # Classify risk and check approval requirements
     risk_level = classify_remediation_risk(actions)
