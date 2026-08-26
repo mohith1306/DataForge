@@ -43,6 +43,20 @@ async def analyze_root_cause(state: dict) -> dict:
         f"- [{e['type']}] {e['summary']}" for e in correlations[:5]
     ) or "No cross-source correlations"
 
+    # Include sandbox analysis results
+    analysis = state.get("analysis_results", {})
+    sandbox_summary = "No sandbox analysis"
+    if analysis:
+        output = analysis.get("code_output", "")
+        result = analysis.get("result")
+        error = analysis.get("error")
+        if error:
+            sandbox_summary = f"Sandbox analysis error: {error}"
+        elif result:
+            sandbox_summary = f"Sandbox result: {json.dumps(result, default=str)[:500]}"
+        elif output:
+            sandbox_summary = f"Sandbox output: {output[:500]}"
+
     try:
         chain = DIAGNOSE_PROMPT | llm
         response = await chain.ainvoke({
@@ -52,6 +66,7 @@ async def analyze_root_cause(state: dict) -> dict:
             "database_summary": db_summary,
             "pipeline_summary": pipeline_summary,
             "github_summary": github_summary,
+            "sandbox_summary": sandbox_summary,
             "correlation_summary": corr_summary,
         })
 

@@ -35,6 +35,7 @@ DIAGNOSE_PROMPT = ChatPromptTemplate.from_messages([
         "- Database: schema changes, null rates, record counts, revenue drops\n"
         "- Pipeline: failures, errors, timing\n"
         "- GitHub: commits, PRs, file changes, deployments\n"
+        "- Sandbox analysis: generated Python analysis results\n"
         "- Cross-source correlations: temporal links between sources\n\n"
         "Your analysis should:\n"
         "1. Correlate timestamps across sources\n"
@@ -55,6 +56,7 @@ DIAGNOSE_PROMPT = ChatPromptTemplate.from_messages([
         "Database findings:\n{database_summary}\n\n"
         "Pipeline findings:\n{pipeline_summary}\n\n"
         "GitHub findings:\n{github_summary}\n\n"
+        "Sandbox analysis:\n{sandbox_summary}\n\n"
         "Cross-source correlations:\n{correlation_summary}\n\n"
         "Determine the most likely root cause with confidence score."
     )),
