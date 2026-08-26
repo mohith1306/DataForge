@@ -7,10 +7,11 @@ DataForge is an AI-driven data reliability platform that autonomously detects, i
 ## Architecture
 
 ```
-Incident Alert → Classify → Investigate → Sandbox Analysis → Diagnose → Plan → Execute → Verify
-                     │            │              │              │          │         │
-                     ▼            ▼              ▼              ▼          ▼         ▼
-                  LLM         MCP Tools     Python Code    LLM Plan   MCP Tools  DQ Checks
+Incident Alert → Classify → Investigate → Sandbox → Diagnose → Plan → Approve → Execute → Verify
+                     │            │           │          │         │         │          │
+                     ▼            ▼           ▼          ▼         ▼         ▼          ▼
+                  LLM         MCP Tools   Python     LLM Plan   Risk     MCP Tools  DQ Checks
+                              (5 tools)   Code                  Check
 ```
 
 ### 6-Phase Pipeline
@@ -21,17 +22,18 @@ Incident Alert → Classify → Investigate → Sandbox Analysis → Diagnose �
 | **Phase 2** | Data Layer — ClickHouse, seed data, SQL safety, Database Agent | ✅ |
 | **Phase 3** | Investigation — Pipeline/GitHub MCP, cross-source correlation | ✅ |
 | **Phase 4** | Agentic Action — sandbox, DQ checks, remediation, verification | ✅ |
-| **Phase 5** | Product UI — dashboard, incident timeline, chaos lab | 🔜 |
-| **Phase 6** | Polish — deployment, monitoring, documentation | 🔜 |
+| **Phase 5** | Product UI — dashboard, incident detail, chaos lab, SSE streaming | ✅ |
+| **Phase 6** | Polish — tests, demo scenario, security checks | ✅ |
 
 ## Tech Stack
 
-- **Backend:** Python 3.14, FastAPI, LangGraph
-- **Frontend:** React 19, Vite, Tailwind CSS
+- **Backend:** Python 3.14, FastAPI, LangGraph, SQLAlchemy async
+- **Frontend:** React 18, Vite, React Router
 - **Database:** PostgreSQL (metadata), ClickHouse (analytics)
-- **LLM:** Groq (Llama 3.3 70B)
+- **LLM:** Groq (Llama 3.3 70B, 128K context)
 - **Tools:** MCP protocol (Database, Monitoring, GitHub, Remediation)
 - **Infrastructure:** Docker Compose
+- **Testing:** pytest, pytest-asyncio, ruff
 
 ## Quick Start
 
@@ -54,6 +56,9 @@ uv run uvicorn apps.api.app.main:app --reload
 
 # 6. Run frontend (separate terminal)
 cd apps/web && npm run dev
+
+# 7. Run demo scenario
+uv run python scripts/demo_scenario.py
 ```
 
 ## Project Structure
@@ -71,21 +76,35 @@ dataforge/
 │   │   └── evidence_merger.py
 │   ├── graph/              # LangGraph workflow
 │   │   ├── graph.py        # Graph definition
-│   │   ├── state.py        # State schema
-│   │   └── nodes/          # Graph nodes
-│   └── prompts/            # LLM prompts
+│   │   ├── state.py        # State schema (IncidentState)
+│   │   ├── router.py       # Conditional routing
+│   │   └── nodes/          # Graph nodes (9 nodes)
+│   ├── models/             # LLM configuration
+│   ├── prompts/            # LLM prompts
+│   ├── schemas/            # Pydantic schemas
+│   └── tools/              # Risk classification
 ├── mcp/                    # MCP tool servers
-│   ├── database/           # ClickHouse tools
+│   ├── database/           # ClickHouse tools (client, sql_safety)
 │   ├── monitoring/         # Pipeline status tools
 │   ├── github/             # GitHub API tools
 │   └── remediation/        # Repair action tools
 ├── sandbox/                # Safe code execution
 ├── apps/
 │   ├── api/                # FastAPI backend
+│   │   ├── api/            # Route handlers (6 routers)
+│   │   ├── core/           # Config, logging
+│   │   ├── db/             # SQLAlchemy models
+│   │   └── schemas/        # Request/response schemas
 │   └── web/                # React frontend
-├── infrastructure/
-│   ├── postgres/           # PostgreSQL init
-│   └── clickhouse/         # ClickHouse config
+│       ├── src/
+│       │   ├── pages/      # Dashboard, IncidentDetail, ChaosLab
+│       │   ├── components/ # AgentTimeline, EvidenceViewer, etc.
+│       │   └── api.js      # API client
+│       └── package.json
+├── tests/                  # Unit tests (47 tests)
+├── scripts/                # Demo & security scripts
+├── data/seed/              # ClickHouse seed data
+├── infrastructure/         # Docker configs
 ├── docker-compose.yml
 └── pyproject.toml
 ```
@@ -97,25 +116,26 @@ dataforge/
 | **Database Agent** | Query ClickHouse for schema, data quality, anomalies | `query_schema`, `profile_column`, `execute_select` |
 | **Pipeline Agent** | Check pipeline status, logs, history | `get_pipeline_status`, `get_pipeline_logs` |
 | **GitHub Agent** | Review commits, PRs, deployments | `get_commits`, `search_code`, `get_pr_files` |
-| **Root Cause Agent** | Analyze evidence, identify root cause | LLM analysis |
-| **Remediation Agent** | Plan and execute repairs | `rerun_pipeline`, `reprocess_partition` |
+| **Root Cause Agent** | Analyze evidence, identify root cause | LLM analysis with confidence scoring |
+| **Remediation Agent** | Plan and execute repairs | LLM planning with risk classification |
 | **Data Quality Agent** | Check freshness, completeness, uniqueness, volume | 6 quality checks |
+| **Evidence Merger** | Cross-source correlation with temporal validation | 48h proximity window |
 
 ## MCP Tools
 
 ### Database
 - `query_schema(table)` — Get table schema
 - `profile_column(table, column)` — Column statistics
-- `execute_select(sql)` — Safe SELECT queries
+- `execute_select(sql)` — Safe SELECT queries with row limits
 
 ### Monitoring
-- `get_pipeline_status()` — All pipeline statuses
+- `get_pipeline_status()` — All pipeline statuses (argMax)
 - `get_pipeline_logs(pipeline_id, limit)` — Pipeline logs
 
 ### GitHub
-- `get_commits(repo, since, sha)` — Recent commits
+- `get_commits(repo, since, sha)` — Recent commits with auth headers
 - `search_code(repo, query)` — Search code changes
-- `get_pr_files(pr_number)` — Files changed in PR
+- `get_pr_files(pr_number)` — Files changed in PR (paginated)
 
 ### Remediation
 - `rerun_pipeline(pipeline_id)` — Trigger re-execution
@@ -127,28 +147,59 @@ dataforge/
 ## API Endpoints
 
 ```
-GET    /api/health              — Health check
-GET    /api/incidents           — List incidents
-POST   /api/incidents           — Create incident
-GET    /api/incidents/{id}      — Get incident
-POST   /api/incidents/{id}/start — Start investigation
-POST   /api/incidents/{id}/remediate — Execute remediation
-POST   /api/chaos/{fault_type}  — Inject chaos fault
+GET    /api/health                    — Health check
+GET    /api/incidents/stats           — Aggregate stats
+GET    /api/incidents                 — List incidents (filterable)
+POST   /api/incidents                 — Create incident
+GET    /api/incidents/{id}            — Get incident
+POST   /api/incidents/{id}/start      — Start investigation
+POST   /api/incidents/{id}/remediate  — Execute remediation
+POST   /api/incidents/{id}/approval   — Approve/reject plan
+GET    /api/incidents/{id}/events     — List events
+GET    /api/incidents/{id}/stream     — SSE real-time stream
+POST   /api/chaos/{fault_type}        — Inject chaos fault
+GET    /api/chaos/faults              — List available faults
 ```
 
 ## Chaos Engineering
 
 DataForge includes a chaos lab for testing incident response:
 
-| Fault Type | Description |
-|------------|-------------|
-| `schema_drift` | Add unexpected columns |
-| `null_injection` | Inject null values |
-| `volume_drop` | Simulate data volume drop |
-| `duplicate_injection` | Insert duplicate records |
-| `freshness_lag` | Delay data ingestion |
-| `distribution_shift` | Shift data distribution |
-| `pipeline_failure` | Force pipeline failure |
+| Fault Type | Description | Severity |
+|------------|-------------|----------|
+| `schema_drift` | Add unexpected columns | HIGH |
+| `null_injection` | Inject null values | MEDIUM |
+| `volume_drop` | Simulate data volume drop | HIGH |
+| `duplicate_injection` | Insert duplicate records | MEDIUM |
+| `freshness_lag` | Delay data ingestion | LOW |
+| `distribution_shift` | Shift data distribution | HIGH |
+| `pipeline_failure` | Force pipeline failure | CRITICAL |
+
+## Testing
+
+```bash
+# Run all unit tests
+uv run pytest tests/ -v
+
+# Run specific test file
+uv run pytest tests/test_risk.py -v
+
+# Run integration tests (requires Postgres)
+uv run pytest tests/test_api.py -v
+
+# Run security check
+uv run python scripts/security_check.py
+```
+
+### Test Coverage
+
+| Module | Tests | Coverage |
+|--------|-------|----------|
+| Graph routing | 7 | State transitions, routing logic |
+| Risk classification | 12 | Tool risk levels, approval requirements |
+| Sandbox execution | 10 | Code execution, security, timeouts |
+| SQL safety | 11 | Query validation, injection prevention |
+| API endpoints | 7 | CRUD, chaos, stats (integration) |
 
 ## Environment Variables
 
@@ -162,6 +213,25 @@ CLICKHOUSE_PORT=8123
 CLICKHOUSE_DATABASE=dataforge
 POSTGRES_URL=postgresql://user:pass@localhost:5432/dataforge
 ```
+
+## Qodo Code Review
+
+DataForge uses Qodo for automated code review on every PR. PRs are reviewed for:
+- Correctness bugs
+- Security vulnerabilities
+- Code quality issues
+- Best practices
+
+### PR History
+
+| PR | Phase | Bugs Found | Bugs Fixed |
+|----|-------|------------|------------|
+| #1 | Phase 1: Foundation | — | — |
+| #2 | Phase 2: Data Layer | 16 | 16 |
+| #3 | Phase 3: Investigation | 14 | 14 |
+| #4 | Phase 4: Agentic Action | 14 | 14 |
+| #5 | Phase 5: Product UI | 13 | 13 |
+| #6 | Phase 6: Polish | — | — |
 
 ## License
 
