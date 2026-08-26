@@ -11,7 +11,7 @@ export default function ApprovalUI({ events, incident }) {
   // Plan data may be in metadata_ or in a separate state property
   const plan = planEvent?.metadata_ || {};
 
-  if (!planEvent && approvalEvents?.length === 0) {
+  if (!planEvent && !approvalEvent) {
     return (
       <div className="empty-state">
         <p>No remediation plan yet</p>

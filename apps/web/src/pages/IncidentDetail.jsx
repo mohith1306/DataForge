@@ -15,24 +15,31 @@ export default function IncidentDetail() {
   const [activeTab, setActiveTab] = useState('timeline');
   const loadedRef = useRef(false);
   const eventIdsRef = useRef(new Set());
+  const pendingEventsRef = useRef([]);
 
   useEffect(() => {
     loadedRef.current = false;
     eventIdsRef.current = new Set();
+    pendingEventsRef.current = [];
 
     loadData();
 
-    // Subscribe to SSE after initiating load
+    // Subscribe to SSE — buffer events until snapshot loads
     const unsub = streamIncident(id, (event) => {
       if (event.type === 'incident.updated') {
         setIncident(prev => ({ ...prev, ...event.data }));
       }
       if (event.type === 'event.created' && event.data) {
-        // Deduplicate by event id or message+type combo
         const key = event.data.id || `${event.data.type}-${event.data.message}`;
         if (!eventIdsRef.current.has(key)) {
           eventIdsRef.current.add(key);
-          setEvents(prev => [...prev, event.data]);
+          if (loadedRef.current) {
+            // Snapshot already loaded — append directly
+            setEvents(prev => [...prev, event.data]);
+          } else {
+            // Snapshot not yet loaded — buffer for later merge
+            pendingEventsRef.current.push(event.data);
+          }
         }
       }
     });
@@ -52,7 +59,10 @@ export default function IncidentDetail() {
         const key = e.id || `${e.type}-${e.message}`;
         eventIdsRef.current.add(key);
       });
-      setEvents(evts);
+      // Merge snapshot with any buffered SSE events
+      const merged = [...evts, ...pendingEventsRef.current];
+      pendingEventsRef.current = [];
+      setEvents(merged);
     } catch (err) {
       console.error('Failed to load incident:', err);
     } finally {
