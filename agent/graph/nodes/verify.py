@@ -82,16 +82,18 @@ async def verify_remediation(state: dict) -> dict:
         before_summary[v["metric"]] = v["before"]
         after_summary[v["metric"]] = v["after"]
 
+    verification_data = {
+        "results": verification_results,
+        "overall_status": overall,
+        "resolved_count": resolved,
+        "total_count": total,
+        "before_summary": before_summary,
+        "after_summary": after_summary,
+    }
+
     return {
         "status": "verifying",
-        "verification_result": {
-            "results": verification_results,
-            "overall_status": overall,
-            "resolved_count": resolved,
-            "total_count": total,
-            "before_summary": before_summary,
-            "after_summary": after_summary,
-        },
+        "verification_result": verification_data,
         "events": state.get("events", []) + [
             {
                 "type": "verification.completed",
@@ -100,6 +102,7 @@ async def verify_remediation(state: dict) -> dict:
                     f"Verification: {resolved}/{total} checks passed — "
                     f"overall: {overall}"
                 ),
+                "metadata_": verification_data,
             }
         ],
     }

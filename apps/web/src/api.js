@@ -1,5 +1,11 @@
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
+export async function fetchStats() {
+  const res = await fetch(`${API_BASE}/incidents/stats`);
+  if (!res.ok) throw new Error('Failed to fetch stats');
+  return res.json();
+}
+
 export async function fetchIncidents(params = {}) {
   const query = new URLSearchParams(params).toString();
   const res = await fetch(`${API_BASE}/incidents${query ? '?' + query : ''}`);
@@ -25,13 +31,32 @@ export async function createIncident(data) {
 
 export async function startInvestigation(id) {
   const res = await fetch(`${API_BASE}/incidents/${id}/start`, { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to start investigation');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to start investigation');
+  }
   return res.json();
 }
 
 export async function executeRemediation(id) {
   const res = await fetch(`${API_BASE}/incidents/${id}/remediate`, { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to execute remediation');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to execute remediation');
+  }
+  return res.json();
+}
+
+export async function approveIncident(id, action, reviewer = 'ui_user') {
+  const res = await fetch(`${API_BASE}/incidents/${id}/approval`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, reviewer }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to submit approval');
+  }
   return res.json();
 }
 
@@ -55,13 +80,18 @@ export async function fetchFaults() {
 
 export function streamIncident(incidentId, onEvent) {
   const eventSource = new EventSource(`${API_BASE}/stream/${incidentId}`);
+
   eventSource.onmessage = (e) => {
     try {
       onEvent(JSON.parse(e.data));
-    } catch { /* ignore */ }
+    } catch { /* ignore parse errors */ }
   };
+
+  // Don't close on transient errors — let EventSource auto-reconnect
   eventSource.onerror = () => {
-    eventSource.close();
+    // EventSource has built-in retry; only close on component unmount
   };
+
+  // Return cleanup function
   return () => eventSource.close();
 }

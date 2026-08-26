@@ -4,6 +4,7 @@ const SOURCE_COLORS = {
   github: '#f59e0b',
   correlation: '#a855f7',
   sandbox: '#f97316',
+  system: '#666',
 };
 
 const SOURCE_ICONS = {
@@ -12,12 +13,23 @@ const SOURCE_ICONS = {
   github: '📦',
   correlation: '🔗',
   sandbox: '🧪',
+  system: '📌',
 };
 
 export default function EvidenceViewer({ events }) {
-  const evidenceEvents = events?.filter(
-    e => e.type?.includes('evidence') || e.type?.includes('finding')
-  ) || [];
+  // Match actual event types emitted by the investigation workflow
+  const evidenceEvents = events?.filter(e => {
+    const t = e.type || '';
+    return (
+      t.includes('evidence') ||
+      t.includes('finding') ||
+      t.includes('tool.completed') ||
+      t.includes('database.') ||
+      t.includes('pipeline.') ||
+      t.includes('github.') ||
+      t.includes('investigation.')
+    );
+  }) || [];
 
   if (evidenceEvents.length === 0) {
     return (
@@ -30,9 +42,18 @@ export default function EvidenceViewer({ events }) {
     );
   }
 
-  // Group by source
+  // Group by source derived from event type or agent field
   const grouped = evidenceEvents.reduce((acc, event) => {
-    const source = event.agent || 'unknown';
+    let source = event.agent || 'system';
+    // Derive source from event type if agent is generic
+    if (source === 'system' || !source) {
+      const t = event.type || '';
+      if (t.includes('database') || t.includes('schema') || t.includes('profile')) source = 'database';
+      else if (t.includes('pipeline')) source = 'pipeline';
+      else if (t.includes('github') || t.includes('commit')) source = 'github';
+      else if (t.includes('correlation')) source = 'correlation';
+      else if (t.includes('sandbox')) source = 'sandbox';
+    }
     if (!acc[source]) acc[source] = [];
     acc[source].push(event);
     return acc;
@@ -40,7 +61,7 @@ export default function EvidenceViewer({ events }) {
 
   return (
     <div className="evidence-viewer">
-      {Object.entries(grouped).map(([source, events]) => (
+      {Object.entries(grouped).map(([source, evts]) => (
         <div key={source} className="evidence-group">
           <div className="evidence-group-header">
             <span
@@ -52,16 +73,18 @@ export default function EvidenceViewer({ events }) {
             <span className="evidence-source-name">
               {source.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}
             </span>
-            <span className="evidence-count">{events.length}</span>
+            <span className="evidence-count">{evts.length}</span>
           </div>
           <div className="evidence-items">
-            {events.map((event, i) => (
+            {evts.map((event, i) => (
               <div key={event.id || i} className="evidence-item">
-                <div className="evidence-type">{event.type}</div>
+                <div className="evidence-type">{event.type || event.agent || 'event'}</div>
                 <div className="evidence-message">{event.message}</div>
                 {event.metadata_ && (
                   <pre className="evidence-data">
-                    {JSON.stringify(event.metadata_, null, 2)}
+                    {typeof event.metadata_ === 'string'
+                      ? event.metadata_
+                      : JSON.stringify(event.metadata_, null, 2)}
                   </pre>
                 )}
               </div>

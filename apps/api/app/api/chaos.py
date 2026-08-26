@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.app.db.models import Incident
+from apps.api.app.api.stream import publish_event
+from apps.api.app.db.models import Incident, IncidentEvent
 from apps.api.app.db.session import get_db
 
 router = APIRouter(prefix="/chaos", tags=["chaos"])
@@ -23,6 +24,17 @@ class ChaosResponse(BaseModel):
     message: str
     incident_id: str | None = None
 
+
+# Map chaos fault types to canonical incident types used by agents
+CHAOS_TO_CANONICAL = {
+    "schema_drift": "schema_drift",
+    "null_injection": "null_explosion",
+    "volume_drop": "volume_drop",
+    "duplicate_injection": "duplicate_records",
+    "freshness_lag": "freshness_lag",
+    "distribution_shift": "distribution_shift",
+    "pipeline_failure": "pipeline_failure",
+}
 
 FAULT_DESCRIPTIONS = {
     "schema_drift": "Schema drift detected — unexpected column types in customer_orders",
@@ -45,13 +57,23 @@ FAULT_SEVERITY = {
 }
 
 
+def _incident_to_dict(inc: Incident) -> dict:
+    return {
+        "id": str(inc.id),
+        "title": inc.title,
+        "severity": inc.severity,
+        "status": inc.status,
+        "incident_type": inc.incident_type,
+    }
+
+
 @router.post("/{fault_type}", response_model=ChaosResponse)
 async def inject_fault(
     fault_type: str,
     payload: ChaosRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> ChaosResponse:
-    """Inject a chaos fault and create a corresponding incident."""
+    """Inject a chaos fault, create incident, and auto-start investigation."""
     if fault_type not in FAULT_DESCRIPTIONS:
         available = list(FAULT_DESCRIPTIONS.keys())
         return ChaosResponse(
@@ -62,20 +84,46 @@ async def inject_fault(
 
     description = FAULT_DESCRIPTIONS[fault_type]
     severity = FAULT_SEVERITY.get(fault_type, "medium")
+    # Use canonical type (no chaos_ prefix) so agents can dispatch correctly
+    canonical_type = CHAOS_TO_CANONICAL.get(fault_type, fault_type)
 
-    # Create incident for the chaos fault
     incident = Incident(
         title=f"Chaos: {fault_type.replace('_', ' ').title()}",
         description=f"[CHAOS INJECTION] {description}",
         severity=severity,
-        status="created",
-        incident_type=f"chaos_{fault_type}",
+        status="investigating",
+        incident_type=canonical_type,
         created_at=datetime.now(UTC),
     )
     db.add(incident)
     await db.flush()
     await db.refresh(incident)
+
+    # Create investigation started event
+    event = IncidentEvent(
+        incident_id=incident.id,
+        type="investigation.started",
+        agent="system",
+        message=f"Auto-started investigation for chaos fault: {fault_type}",
+    )
+    db.add(event)
+    await db.flush()
     await db.commit()
+
+    # Publish SSE events
+    incident_data = _incident_to_dict(incident)
+    await publish_event(str(incident.id), {
+        "type": "incident.updated",
+        "data": incident_data,
+    })
+    await publish_event(str(incident.id), {
+        "type": "event.created",
+        "data": {
+            "type": "investigation.started",
+            "agent": "system",
+            "message": f"Auto-started investigation for chaos fault: {fault_type}",
+        },
+    })
 
     return ChaosResponse(
         status="injected",

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchIncidents } from '../api';
+import { fetchIncidents, fetchStats } from '../api';
 
 const SEVERITY_COLORS = {
   critical: '#ef4444',
@@ -28,22 +28,20 @@ export default function Dashboard() {
   const [filter, setFilter] = useState('all');
 
   useEffect(() => {
-    loadIncidents();
-    const interval = setInterval(loadIncidents, 10000);
+    loadData();
+    const interval = setInterval(loadData, 10000);
     return () => clearInterval(interval);
   }, [filter]);
 
-  async function loadIncidents() {
+  async function loadData() {
     try {
-      const params = filter !== 'all' ? { status: filter } : {};
-      const data = await fetchIncidents(params);
-      setIncidents(data);
-      setStats({
-        total: data.length,
-        open: data.filter(i => !['resolved', 'failed'].includes(i.status)).length,
-        resolved: data.filter(i => i.status === 'resolved').length,
-        critical: data.filter(i => i.severity === 'critical').length,
-      });
+      // Fetch stats separately (unfiltered) and list with current filter
+      const [statsData, listData] = await Promise.all([
+        fetchStats(),
+        fetchIncidents(filter !== 'all' ? { status: filter } : {}),
+      ]);
+      setStats(statsData);
+      setIncidents(listData);
     } catch (err) {
       console.error('Failed to load incidents:', err);
     } finally {

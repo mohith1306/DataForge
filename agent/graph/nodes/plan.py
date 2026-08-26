@@ -86,6 +86,8 @@ async def plan_remediation(state: dict) -> dict:
         "risk_level": risk_level,
         "requires_approval": requires_approval,
         "root_cause_confidence": confidence,
+        "summary": parsed.get("summary", f"Remediation plan with {len(actions)} actions"),
+        "estimated_recovery_time": parsed.get("estimated_recovery_time", "unknown"),
     }
 
     return {
@@ -101,6 +103,7 @@ async def plan_remediation(state: dict) -> dict:
                     f"Remediation plan: {len(actions)} actions, "
                     f"risk={risk_level}"
                 ),
+                "metadata_": plan,
             }
         ],
     }

@@ -111,6 +111,7 @@ async def analyze_root_cause(state: dict) -> dict:
                         f"Root cause: {root_cause['description'][:100]} "
                         f"(confidence: {confidence:.0%})"
                     ),
+                    "metadata_": root_cause,
                 }
             ],
         }
@@ -127,6 +128,7 @@ async def analyze_root_cause(state: dict) -> dict:
                     "type": "diagnosis.created",
                     "agent": "root_cause_analyst",
                     "message": f"Heuristic root cause: {root_cause['description'][:100]}",
+                    "metadata_": root_cause,
                 }
             ],
         }

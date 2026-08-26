@@ -15,11 +15,14 @@ export default function VerificationUI({ events }) {
   }
 
   const latestVerification = verificationEvents[verificationEvents.length - 1];
-  const results = latestVerification.metadata_?.results || [];
+
+  // Try to get results from metadata_ (may be verification_result or direct results)
+  const metadata = latestVerification.metadata_ || {};
+  const results = metadata.results || metadata.verification_result?.results || [];
+  const overall = metadata.overall_status || metadata.verification_result?.overall_status || 'unknown';
 
   const resolved = results.filter(r => r.status === 'resolved').length;
   const total = results.length;
-  const overall = latestVerification.metadata_?.overall_status || 'unknown';
 
   return (
     <div className="verification-ui">
@@ -37,12 +40,15 @@ export default function VerificationUI({ events }) {
             />
             <span style={{ fontWeight: 600 }}>
               {overall === 'resolved' ? 'All Checks Passed' :
-               overall === 'partially_resolved' ? 'Partially Resolved' : 'Verification Failed'}
+               overall === 'partially_resolved' ? 'Partially Resolved' :
+               results.length > 0 ? 'Verification Failed' : 'No Results'}
             </span>
           </div>
-          <div className="verification-count">
-            {resolved}/{total} checks passed
-          </div>
+          {results.length > 0 && (
+            <div className="verification-count">
+              {resolved}/{total} checks passed
+            </div>
+          )}
         </div>
 
         {results.length > 0 && (
@@ -73,20 +79,22 @@ export default function VerificationUI({ events }) {
           </div>
         )}
 
-        {latestVerification.metadata_?.before_summary && (
+        {(metadata.before_summary || metadata.verification_result?.before_summary) && (
           <div className="before-after-section">
             <h3 style={{ fontSize: '0.875rem', color: '#999', marginBottom: '0.5rem' }}>
               Before/After Summary
             </h3>
             <div className="before-after-grid">
-              {Object.entries(latestVerification.metadata_.before_summary).map(([key, before]) => (
+              {Object.entries(
+                metadata.before_summary || metadata.verification_result?.before_summary || {}
+              ).map(([key, before]) => (
                 <div key={key} className="before-after-item">
                   <div className="ba-metric">{key}</div>
                   <div className="ba-values">
                     <span className="ba-before">{before}</span>
                     <span className="ba-arrow">→</span>
                     <span className="ba-after">
-                      {latestVerification.metadata_.after_summary?.[key] || '—'}
+                      {(metadata.after_summary || metadata.verification_result?.after_summary)?.[key] || '—'}
                     </span>
                   </div>
                 </div>

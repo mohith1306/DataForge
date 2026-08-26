@@ -1,16 +1,17 @@
 import { useState } from 'react';
+import { approveIncident } from '../api';
 
 export default function ApprovalUI({ events, incident }) {
   const [approving, setApproving] = useState(false);
+  const [error, setError] = useState(null);
 
-  const approvalEvents = events?.filter(
-    e => e.type?.includes('approval') || e.type?.includes('plan.created')
-  ) || [];
+  const planEvent = events?.find(e => e.type === 'plan.created');
+  const approvalEvent = events?.find(e => e.type?.includes('approval'));
 
-  const planEvent = approvalEvents.find(e => e.type === 'plan.created');
-  const approvalEvent = approvalEvents.find(e => e.type?.includes('approval.requested'));
+  // Plan data may be in metadata_ or in a separate state property
+  const plan = planEvent?.metadata_ || {};
 
-  if (!planEvent && approvalEvents.length === 0) {
+  if (!planEvent && approvalEvents?.length === 0) {
     return (
       <div className="empty-state">
         <p>No remediation plan yet</p>
@@ -21,7 +22,18 @@ export default function ApprovalUI({ events, incident }) {
     );
   }
 
-  const plan = planEvent?.metadata_ || {};
+  async function handleApproval(action) {
+    setApproving(true);
+    setError(null);
+    try {
+      await approveIncident(incident.id, action);
+      window.location.reload();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setApproving(false);
+    }
+  }
 
   return (
     <div className="approval-ui">
@@ -74,41 +86,37 @@ export default function ApprovalUI({ events, incident }) {
           </div>
         )}
 
+        {error && (
+          <div className="alert alert-error" style={{ marginTop: '1rem' }}>
+            {error}
+          </div>
+        )}
+
         {incident?.status === 'awaiting_approval' && (
           <div className="approval-actions" style={{ marginTop: '1.5rem' }}>
             <button
               className="btn btn-success"
               disabled={approving}
-              onClick={() => handleApprove('approve')}
+              onClick={() => handleApproval('approve')}
             >
               {approving ? 'Approving...' : 'Approve & Execute'}
             </button>
             <button
               className="btn btn-danger"
               disabled={approving}
-              onClick={() => handleApprove('reject')}
+              onClick={() => handleApproval('reject')}
             >
               Reject
             </button>
           </div>
         )}
+
+        {approvalEvent && (
+          <div className="approval-result" style={{ marginTop: '1rem', color: '#888', fontSize: '0.875rem' }}>
+            {approvalEvent.message}
+          </div>
+        )}
       </div>
     </div>
   );
-
-  async function handleApprove(action) {
-    setApproving(true);
-    try {
-      await fetch(`http://localhost:8000/api/incidents/${incident.id}/approval`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, reviewer: 'ui_user' }),
-      });
-      window.location.reload();
-    } catch (err) {
-      console.error('Approval failed:', err);
-    } finally {
-      setApproving(false);
-    }
-  }
 }

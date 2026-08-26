@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { fetchIncident, fetchEvents, streamIncident, startInvestigation, executeRemediation } from '../api';
 import AgentTimeline from '../components/AgentTimeline';
@@ -13,17 +13,30 @@ export default function IncidentDetail() {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('timeline');
+  const loadedRef = useRef(false);
+  const eventIdsRef = useRef(new Set());
 
   useEffect(() => {
+    loadedRef.current = false;
+    eventIdsRef.current = new Set();
+
     loadData();
+
+    // Subscribe to SSE after initiating load
     const unsub = streamIncident(id, (event) => {
       if (event.type === 'incident.updated') {
         setIncident(prev => ({ ...prev, ...event.data }));
       }
-      if (event.type === 'event.created') {
-        setEvents(prev => [...prev, event.data]);
+      if (event.type === 'event.created' && event.data) {
+        // Deduplicate by event id or message+type combo
+        const key = event.data.id || `${event.data.type}-${event.data.message}`;
+        if (!eventIdsRef.current.has(key)) {
+          eventIdsRef.current.add(key);
+          setEvents(prev => [...prev, event.data]);
+        }
       }
     });
+
     return () => unsub();
   }, [id]);
 
@@ -34,18 +47,23 @@ export default function IncidentDetail() {
         fetchEvents(id),
       ]);
       setIncident(inc);
+      // Index existing events for dedup
+      evts.forEach(e => {
+        const key = e.id || `${e.type}-${e.message}`;
+        eventIdsRef.current.add(key);
+      });
       setEvents(evts);
     } catch (err) {
       console.error('Failed to load incident:', err);
     } finally {
       setLoading(false);
+      loadedRef.current = true;
     }
   }
 
   async function handleStartInvestigation() {
     try {
       await startInvestigation(id);
-      loadData();
     } catch (err) {
       console.error('Failed to start investigation:', err);
     }
@@ -54,7 +72,6 @@ export default function IncidentDetail() {
   async function handleRemediate() {
     try {
       await executeRemediation(id);
-      loadData();
     } catch (err) {
       console.error('Failed to execute remediation:', err);
     }
