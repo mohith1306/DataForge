@@ -19,8 +19,8 @@ class ClickHouseClient:
     """Async client for ClickHouse HTTP interface."""
 
     def __init__(self) -> None:
-        self.url = settings.clickhouse_url
-        self.database = settings.clickhouse_db
+        self.url = f"http://{settings.clickhouse_host}:{settings.clickhouse_port}"
+        self.database = settings.clickhouse_database
 
     async def execute(self, query: str) -> list[dict]:
         """Execute a query and return results as list of dicts."""

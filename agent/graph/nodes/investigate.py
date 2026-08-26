@@ -1,8 +1,6 @@
 import logging
 
 from agent.agents.evidence_merger import merge_evidence
-from agent.agents.github_agent import investigate_github
-from agent.agents.pipeline_agent import investigate_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -12,21 +10,25 @@ async def investigate(state: dict) -> dict:
     incident_type = state.get("incident_type", "unknown")
     description = state.get("description", state.get("user_request", ""))
 
-    # Run pipeline and GitHub investigations (database already done in separate node)
-    pipeline_result = {}
-    github_result = {}
+    # Lazy imports to avoid circular dependencies
+    from agent.agents.github_agent import investigate_github
+    from agent.agents.pipeline_agent import investigate_pipeline
+
+    pipeline_result = {"findings": [], "errors": []}
+    github_result = {"findings": [], "errors": []}
 
     try:
         pipeline_result = await investigate_pipeline(incident_type, description)
     except Exception as e:
         logger.error(f"Pipeline investigation failed: {e}")
+        pipeline_result["errors"].append(str(e))
 
     try:
         github_result = await investigate_github(incident_type, description)
     except Exception as e:
         logger.error(f"GitHub investigation failed: {e}")
+        github_result["errors"].append(str(e))
 
-    # Merge all evidence
     database_findings = state.get("database_findings", [])
     pipeline_findings = pipeline_result.get("findings", [])
     github_findings = github_result.get("findings", [])

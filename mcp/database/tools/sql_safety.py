@@ -75,9 +75,23 @@ def validate_query(query: str) -> str:
     return cleaned
 
 
-def add_row_limit(query: str, limit: int = MAX_RESULT_ROWS) -> str:
-    """Add a LIMIT clause if not already present."""
+def enforce_row_limit(query: str, limit: int = MAX_RESULT_ROWS) -> str:
+    """Enforce a maximum row limit by wrapping in a subquery if needed."""
     upper = query.upper()
-    if "LIMIT" not in upper:
-        query = f"{query.rstrip()} LIMIT {limit}"
-    return query
+
+    # Check if there's already a LIMIT clause
+    limit_match = re.search(r"\bLIMIT\s+(\d+)", upper)
+    if limit_match:
+        existing_limit = int(limit_match.group(1))
+        if existing_limit <= limit:
+            return query
+        # Replace existing limit with our max
+        return re.sub(r"\bLIMIT\s+\d+", f"LIMIT {limit}", query, count=1)
+
+    # No LIMIT clause, add one
+    return f"{query.rstrip()} LIMIT {limit}"
+
+
+def add_row_limit(query: str, limit: int = MAX_RESULT_ROWS) -> str:
+    """Add a LIMIT clause if not already present (deprecated, use enforce_row_limit)."""
+    return enforce_row_limit(query, limit)

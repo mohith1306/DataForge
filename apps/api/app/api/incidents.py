@@ -21,6 +21,7 @@ async def create_incident(payload: IncidentCreate, db: AsyncSession = Depends(ge
     db.add(incident)
     await db.flush()
     await db.refresh(incident)
+    await db.commit()
     return incident
 
 
