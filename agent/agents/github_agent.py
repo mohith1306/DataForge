@@ -14,18 +14,33 @@ logger = logging.getLogger(__name__)
 
 REPO = "mohith1306/DataForge"
 
-# Keywords that suggest schema/data-related changes
-SUSPICIOUS_KEYWORDS = [
-    "schema", "region", "enum", "nullable", "transform",
-    "migration", "column", "type", "deploy", "release",
-    "revenue", "customer", "pipeline", "data", "column",
-]
+# Default keywords if incident context doesn't match specific categories
+DEFAULT_KEYWORDS = ["schema", "region", "deploy", "data", "pipeline"]
+
+# Incident-type → relevant search keywords
+INCIDENT_KEYWORDS = {
+    "schema_drift": ["schema", "region", "enum", "nullable", "column", "migration", "type"],
+    "null_explosion": ["null", "nullable", "schema", "column", "transform"],
+    "missing_partition": ["partition", "date", "pipeline", "scheduler", "cron"],
+    "duplicate_records": ["dedup", "unique", "merge", "upsert", "key"],
+    "pipeline_failure": ["pipeline", "deploy", "release", "config", "error"],
+    "volume_anomaly": ["volume", "batch", "streaming", "kafka", "queue"],
+    "business_metric_anomaly": ["revenue", "metric", "kpi", "dashboard", "transform"],
+}
 
 
 async def investigate_github(incident_type: str, description: str) -> dict:
     """Investigate GitHub commits and PRs related to the incident."""
     findings = []
     errors = []
+    seen_shas: set[str] = set()
+
+    # Select keywords based on incident type
+    keywords = INCIDENT_KEYWORDS.get(incident_type, DEFAULT_KEYWORDS)
+    # Also extract domain keywords from description
+    desc_words = description.lower().split()
+    desc_keywords = [w for w in desc_words if len(w) > 4][:3]
+    search_keywords = list(dict.fromkeys(keywords + desc_keywords))[:6]
 
     # Step 1: Get recent commits
     try:
@@ -37,18 +52,20 @@ async def investigate_github(incident_type: str, description: str) -> dict:
             "summary": f"Retrieved {len(commits)} recent commits",
         })
 
-        # Search for suspicious commits
-        for kw in SUSPICIOUS_KEYWORDS[:5]:
+        # Search for suspicious commits using incident-aware keywords
+        for kw in search_keywords:
             try:
                 search_result = await search_commits(repo=REPO, keyword=kw, limit=5)
                 matched = search_result.get("commits", [])
-                if matched:
-                    for c in matched:
+                for c in matched:
+                    sha = c.get("sha", "")
+                    if sha and sha not in seen_shas:
+                        seen_shas.add(sha)
                         findings.append({
                             "type": "suspicious_commit",
                             "data": {"commit": c, "keyword": kw},
                             "summary": (
-                                f"Suspicious commit ({kw}): {c['sha']} — "
+                                f"Suspicious commit ({kw}): {sha} — "
                                 f"{c['message']}"
                             ),
                         })

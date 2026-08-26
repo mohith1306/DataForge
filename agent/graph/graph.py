@@ -1,7 +1,7 @@
 """DataForge Agent — LangGraph workflow with conditional routing."""
 from langgraph.graph import END, StateGraph
 
-from agent.graph.nodes.approval import approval_gate, process_approval
+from agent.graph.nodes.approval import approval_gate
 from agent.graph.nodes.classify import classify
 from agent.graph.nodes.diagnose import diagnose
 from agent.graph.nodes.execute import execute_remediation
@@ -28,12 +28,16 @@ def route_after_diagnosis(state: IncidentState) -> str:
 
 
 def route_after_approval(state: IncidentState) -> str:
-    """Route based on approval status."""
+    """Route based on approval status.
+
+    When approval is required and pending, the workflow pauses (ends).
+    The API resumes the graph by updating state when approval is received.
+    """
     approval_status = state.get("approval_status", "")
     if approval_status == "rejected":
         return "investigate"
     if approval_status == "pending":
-        return "approval"
+        return "end_pause"  # Pause workflow — API resumes later
     return "execute"
 
 
@@ -41,7 +45,7 @@ def route_after_verify(state: IncidentState) -> str:
     """Route based on verification result."""
     verification = state.get("verification_result", {})
     overall = verification.get("overall_status", "")
-    if overall == "unresolved":
+    if overall in ("unresolved", "partially_resolved"):
         return "investigate"
     return END
 
@@ -55,7 +59,6 @@ def build_graph() -> StateGraph:
     graph.add_node("diagnose", diagnose)
     graph.add_node("plan", plan_remediation)
     graph.add_node("approval", approval_gate)
-    graph.add_node("approval_process", process_approval)
     graph.add_node("execute", execute_remediation)
     graph.add_node("verify", verify_remediation)
 
@@ -87,14 +90,15 @@ def build_graph() -> StateGraph:
 
     graph.add_edge("plan", "approval")
 
-    # Conditional: approval → execute (or loop if pending, or investigate if rejected)
+    # Conditional: approval → execute (or pause if pending, or investigate if rejected)
+    # When pending, the graph pauses at END. The API resumes by re-invoking with updated state.
     graph.add_conditional_edges(
         "approval",
         route_after_approval,
         {
             "execute": "execute",
             "investigate": "investigate",
-            "approval": "approval",
+            "end_pause": END,
         },
     )
 

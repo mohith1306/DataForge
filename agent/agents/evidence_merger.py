@@ -71,14 +71,44 @@ def merge_evidence(
 
 
 def _find_correlations(evidence: list[dict]) -> list[dict]:
-    """Find cross-source correlations (e.g., commit timing matches pipeline failure)."""
+    """Find cross-source correlations with timestamp/entity validation."""
+    from datetime import datetime
+
     correlations = []
 
     db_items = [e for e in evidence if e["source"] == "database"]
     pipeline_items = [e for e in evidence if e["source"] == "pipeline"]
     github_items = [e for e in evidence if e["source"] == "github"]
 
-    # Correlation 1: Pipeline failures + schema/data anomalies
+    # Extract timestamps from evidence for temporal comparison
+    def _extract_timestamps(items: list[dict]) -> list[datetime]:
+        timestamps = []
+        for item in items:
+            content = item.get("content", {})
+            for key in ("started_at", "date", "created_at", "merged_at"):
+                val = content.get(key)
+                if val:
+                    try:
+                        if isinstance(val, str):
+                            ts = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                        else:
+                            ts = datetime.fromtimestamp(float(val))
+                        timestamps.append(ts)
+                    except (ValueError, TypeError, OSError):
+                        pass
+        return timestamps
+
+    def _temporal_overlap(ts_list_a: list[datetime], ts_list_b: list[datetime],
+                          window_hours: int = 48) -> bool:
+        """Check if any timestamps from A are within window_hours of any in B."""
+        if not ts_list_a or not ts_list_b:
+            return False
+        for a in ts_list_a:
+            for b in ts_list_b:
+                if abs((a - b).total_seconds()) < window_hours * 3600:
+                    return True
+        return False
+
     failed_pipelines = [
         e for e in pipeline_items
         if e["type"] in ("failed_jobs", "failed_job_detail", "pipeline_overview")
@@ -87,13 +117,24 @@ def _find_correlations(evidence: list[dict]) -> list[dict]:
         e for e in db_items
         if e["type"] in ("column_profile", "aggregation", "revenue_trend")
     ]
-    if failed_pipelines and schema_issues:
+    suspicious_commits = [
+        e for e in github_items if e["type"] in ("suspicious_commit", "commit_detail")
+    ]
+    merged_prs = [
+        e for e in github_items
+        if e["type"] in ("merged_pr", "pr_file_changes")
+    ]
+
+    # Correlation 1: Pipeline failures + schema/data anomalies (require temporal proximity)
+    pipeline_ts = _extract_timestamps(failed_pipelines)
+    db_ts = _extract_timestamps(schema_issues)
+    if failed_pipelines and schema_issues and _temporal_overlap(pipeline_ts, db_ts):
         correlations.append({
             "type": "pipeline_data_correlation",
             "sources": ["pipeline", "database"],
             "summary": (
                 f"Pipeline failures ({len(failed_pipelines)} items) coincide with "
-                f"data anomalies ({len(schema_issues)} items)"
+                f"data anomalies ({len(schema_issues)} items) within 48h window"
             ),
             "details": {
                 "pipeline_findings": [e["summary"] for e in failed_pipelines[:3]],
@@ -101,16 +142,14 @@ def _find_correlations(evidence: list[dict]) -> list[dict]:
             },
         })
 
-    # Correlation 2: Suspicious commits + pipeline failures
-    suspicious_commits = [
-        e for e in github_items if e["type"] in ("suspicious_commit", "commit_detail")
-    ]
-    if suspicious_commits and failed_pipelines:
+    # Correlation 2: Suspicious commits + pipeline failures (require temporal proximity)
+    github_ts = _extract_timestamps(suspicious_commits)
+    if suspicious_commits and failed_pipelines and _temporal_overlap(github_ts, pipeline_ts):
         correlations.append({
             "type": "commit_pipeline_correlation",
             "sources": ["github", "pipeline"],
             "summary": (
-                f"Suspicious commits ({len(suspicious_commits)}) may have caused "
+                f"Suspicious commits ({len(suspicious_commits)}) temporally close to "
                 f"pipeline failures ({len(failed_pipelines)} failed)"
             ),
             "details": {
@@ -119,17 +158,14 @@ def _find_correlations(evidence: list[dict]) -> list[dict]:
             },
         })
 
-    # Correlation 3: Merged PRs + data changes
-    merged_prs = [
-        e for e in github_items
-        if e["type"] in ("merged_pr", "pr_file_changes")
-    ]
-    if merged_prs and schema_issues:
+    # Correlation 3: Merged PRs + data changes (require temporal proximity)
+    pr_ts = _extract_timestamps(merged_prs)
+    if merged_prs and schema_issues and _temporal_overlap(pr_ts, db_ts):
         correlations.append({
             "type": "pr_data_correlation",
             "sources": ["github", "database"],
             "summary": (
-                f"Merged PRs ({len(merged_prs)}) coincide with "
+                f"Merged PRs ({len(merged_prs)}) temporally close to "
                 f"data quality changes ({len(schema_issues)} findings)"
             ),
             "details": {
@@ -138,13 +174,16 @@ def _find_correlations(evidence: list[dict]) -> list[dict]:
             },
         })
 
-    # Correlation 4: Three-way — commit → pipeline → data impact
-    if suspicious_commits and failed_pipelines and schema_issues:
+    # Correlation 4: Three-way chain — require ALL pairwise temporal overlaps
+    if (suspicious_commits and failed_pipelines and schema_issues
+            and _temporal_overlap(github_ts, pipeline_ts)
+            and _temporal_overlap(pipeline_ts, db_ts)):
         correlations.append({
             "type": "full_causal_chain",
             "sources": ["github", "pipeline", "database"],
             "summary": (
-                "Strong causal chain: suspicious commit → pipeline failure → data impact"
+                "Strong causal chain with temporal evidence: "
+                "commit → pipeline failure → data impact"
             ),
             "details": {
                 "commit": suspicious_commits[0]["summary"],

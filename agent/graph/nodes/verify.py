@@ -100,6 +100,12 @@ async def verify_remediation(state: dict) -> dict:
             })
     except Exception as e:
         logger.error(f"Volume verification failed: {e}")
+        verification_results.append({
+            "metric": "record_count",
+            "before": "< 3000",
+            "after": "UNKNOWN",
+            "status": "error",
+        })
 
     resolved = sum(1 for v in verification_results if v["status"] == "resolved")
     total = len(verification_results)

@@ -1,12 +1,18 @@
 """Pipeline MCP tools — query pipeline_events in ClickHouse for status, logs, and metrics."""
 
+import json
+import logging
+
 import httpx
+
+logger = logging.getLogger(__name__)
 
 CLICKHOUSE_URL = "http://localhost:8123"
 CLICKHOUSE_DB = "dataforge"
 
 
 async def _query(sql: str) -> list[dict]:
+    """Execute a ClickHouse query. Raises on HTTP errors instead of returning error dicts."""
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{CLICKHOUSE_URL}/",
@@ -14,16 +20,15 @@ async def _query(sql: str) -> list[dict]:
             content=sql,
         )
         if resp.status_code != 200:
-            return [{"error": resp.text}]
+            raise RuntimeError(f"ClickHouse query failed ({resp.status_code}): {resp.text}")
         text = resp.text.strip()
         if not text:
             return []
-        import json
         return [json.loads(line) for line in text.split("\n") if line.strip()]
 
 
 async def get_pipeline_status(pipeline_id: str | None = None) -> dict:
-    """Get current status of pipelines."""
+    """Get current status of pipelines — latest run per pipeline, not global last 20."""
     if pipeline_id:
         sql = (
             f"SELECT pipeline_id, pipeline_name, status, started_at, completed_at, "
@@ -33,11 +38,18 @@ async def get_pipeline_status(pipeline_id: str | None = None) -> dict:
             f"ORDER BY started_at DESC LIMIT 1"
         )
     else:
+        # Get the latest run per pipeline using argMax pattern
         sql = (
-            f"SELECT pipeline_id, pipeline_name, status, started_at, completed_at, "
-            f"error_message, rows_processed "
+            f"SELECT pipeline_id, "
+            f"argMax(pipeline_name, started_at) as pipeline_name, "
+            f"argMax(status, started_at) as status, "
+            f"argMax(started_at, started_at) as started_at, "
+            f"argMax(completed_at, started_at) as completed_at, "
+            f"argMax(error_message, started_at) as error_message, "
+            f"argMax(rows_processed, started_at) as rows_processed "
             f"FROM {CLICKHOUSE_DB}.pipeline_events "
-            f"ORDER BY started_at DESC LIMIT 20"
+            f"GROUP BY pipeline_id "
+            f"ORDER BY started_at DESC"
         )
     rows = await _query(sql)
     return {"pipelines": rows, "count": len(rows)}
@@ -103,7 +115,8 @@ async def get_pipeline_metrics(pipeline_id: str) -> dict:
         f"sum(rows_processed) as total_rows_processed "
         f"FROM {CLICKHOUSE_DB}.pipeline_events "
         f"WHERE pipeline_id = '{pipeline_id}' "
-        f"AND started_at >= now() - INTERVAL 30 DAY"
+        f"AND started_at >= now() - INTERVAL 30 DAY "
+        f"GROUP BY pipeline_id"
     )
     rows = await _query(sql)
     return {"metrics": rows[0] if rows else {}, "pipeline_id": pipeline_id}

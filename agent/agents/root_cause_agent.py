@@ -2,11 +2,19 @@
 
 import json
 import logging
+import math
 
 from agent.models.llm import get_llm
 from agent.prompts.investigation import DIAGNOSE_PROMPT
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_confidence(value: float) -> float:
+    """Validate and clamp confidence to [0.0, 1.0]."""
+    if not isinstance(value, (int, float)) or not math.isfinite(value):
+        return 0.5
+    return max(0.0, min(1.0, float(value)))
 
 
 async def analyze_root_cause(state: dict) -> dict:
@@ -31,6 +39,9 @@ async def analyze_root_cause(state: dict) -> dict:
     github_summary = "\n".join(
         f"- [{e['type']}] {e['summary']}" for e in github_findings[:10]
     ) or "No github findings"
+    corr_summary = "\n".join(
+        f"- [{e['type']}] {e['summary']}" for e in correlations[:5]
+    ) or "No cross-source correlations"
 
     try:
         chain = DIAGNOSE_PROMPT | llm
@@ -41,13 +52,13 @@ async def analyze_root_cause(state: dict) -> dict:
             "database_summary": db_summary,
             "pipeline_summary": pipeline_summary,
             "github_summary": github_summary,
+            "correlation_summary": corr_summary,
         })
 
         content = response.content if hasattr(response, "content") else str(response)
 
         # Try to parse JSON from response
         try:
-            # Find JSON in response
             start = content.find("{")
             end = content.rfind("}") + 1
             if start >= 0 and end > start:
@@ -62,9 +73,11 @@ async def analyze_root_cause(state: dict) -> dict:
                 "business_impact": {},
             }
 
+        confidence = _validate_confidence(parsed.get("confidence", 0.6))
+
         root_cause = {
             "description": parsed.get("root_cause", parsed.get("description", "Unknown")),
-            "confidence": float(parsed.get("confidence", 0.6)),
+            "confidence": confidence,
             "alternatives": parsed.get("alternatives", []),
             "business_impact": parsed.get("business_impact", {}),
             "evidence_sources": list(set(e.get("source", "") for e in evidence)),
@@ -74,14 +87,14 @@ async def analyze_root_cause(state: dict) -> dict:
         return {
             "status": "diagnosing",
             "root_cause": root_cause,
-            "confidence": root_cause["confidence"],
+            "confidence": confidence,
             "events": state.get("events", []) + [
                 {
                     "type": "diagnosis.created",
                     "agent": "root_cause_analyst",
                     "message": (
                         f"Root cause: {root_cause['description'][:100]} "
-                        f"(confidence: {root_cause['confidence']:.0%})"
+                        f"(confidence: {confidence:.0%})"
                     ),
                 }
             ],
@@ -89,7 +102,6 @@ async def analyze_root_cause(state: dict) -> dict:
 
     except Exception as e:
         logger.error(f"Root cause analysis failed: {e}")
-        # Fallback: heuristic-based analysis
         root_cause = _heuristic_analysis(state)
         return {
             "status": "diagnosing",
@@ -123,7 +135,7 @@ def _heuristic_analysis(state: dict) -> dict:
     if "github" in sources:
         confidence += 0.05
 
-    confidence = min(confidence, 0.9)
+    confidence = _validate_confidence(confidence)
 
     description = f"Automated analysis of {incident_type} incident"
     if has_correlation:

@@ -1,9 +1,20 @@
 """GitHub MCP tools — query GitHub API for commits, PRs, and file changes."""
 
+import os
+
 import httpx
 
 GITHUB_API = "https://api.github.com"
 REPO = "mohith1306/DataForge"
+
+
+def _get_headers() -> dict:
+    """Get GitHub API headers with optional auth token."""
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 async def get_recent_commits(
@@ -11,9 +22,9 @@ async def get_recent_commits(
 ) -> dict:
     """Get recent commits from a repository."""
     url = f"{GITHUB_API}/repos/{repo}/commits"
-    params = {"sha": branch, "per_page": limit}
+    params = {"sha": branch, "per_page": min(limit, 100)}
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url, params=params)
+        resp = await client.get(url, params=params, headers=_get_headers())
         if resp.status_code != 200:
             return {"commits": [], "error": resp.text}
         data = resp.json()
@@ -32,7 +43,7 @@ async def get_commit(repo: str = REPO, sha: str = "") -> dict:
     """Get detailed commit information."""
     url = f"{GITHUB_API}/repos/{repo}/commits/{sha}"
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url)
+        resp = await client.get(url, headers=_get_headers())
         if resp.status_code != 200:
             return {"error": resp.text}
         c = resp.json()
@@ -60,9 +71,9 @@ async def get_pull_requests(
 ) -> dict:
     """Get pull requests."""
     url = f"{GITHUB_API}/repos/{repo}/pulls"
-    params = {"state": state, "per_page": limit, "sort": "updated"}
+    params = {"state": state, "per_page": min(limit, 100), "sort": "updated"}
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url, params=params)
+        resp = await client.get(url, params=params, headers=_get_headers())
         if resp.status_code != 200:
             return {"pull_requests": [], "error": resp.text}
         data = resp.json()
@@ -81,24 +92,37 @@ async def get_pull_requests(
         return {"pull_requests": prs, "count": len(prs)}
 
 
-async def get_changed_files(repo: str = REPO, pr_number: int = 0) -> dict:
-    """Get files changed in a pull request."""
+async def get_changed_files(
+    repo: str = REPO, pr_number: int = 0, max_pages: int = 3
+) -> dict:
+    """Get files changed in a pull request, with pagination."""
     url = f"{GITHUB_API}/repos/{repo}/pulls/{pr_number}/files"
+    all_files = []
+    page = 1
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url)
-        if resp.status_code != 200:
-            return {"files": [], "error": resp.text}
-        data = resp.json()
-        files = []
-        for f in data:
-            files.append({
-                "filename": f["filename"],
-                "status": f["status"],
-                "additions": f["additions"],
-                "deletions": f["deletions"],
-                "changes": f["changes"],
-            })
-        return {"files": files, "count": len(files), "pr_number": pr_number}
+        while page <= max_pages:
+            resp = await client.get(
+                url, params={"per_page": 100, "page": page}, headers=_get_headers()
+            )
+            if resp.status_code != 200:
+                if not all_files:
+                    return {"files": [], "error": resp.text}
+                break
+            data = resp.json()
+            if not data:
+                break
+            for f in data:
+                all_files.append({
+                    "filename": f["filename"],
+                    "status": f["status"],
+                    "additions": f["additions"],
+                    "deletions": f["deletions"],
+                    "changes": f["changes"],
+                })
+            if len(data) < 100:
+                break
+            page += 1
+    return {"files": all_files, "count": len(all_files), "pr_number": pr_number}
 
 
 async def search_commits(
@@ -108,7 +132,7 @@ async def search_commits(
     url = f"{GITHUB_API}/repos/{repo}/commits"
     params = {"per_page": 100}
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url, params=params)
+        resp = await client.get(url, params=params, headers=_get_headers())
         if resp.status_code != 200:
             return {"commits": [], "error": resp.text}
         data = resp.json()
