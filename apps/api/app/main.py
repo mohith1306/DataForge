@@ -3,9 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from apps.api.app.api.chaos import router as chaos_router
 from apps.api.app.api.events import router as events_router
 from apps.api.app.api.health import router as health_router
 from apps.api.app.api.incidents import router as incidents_router
+from apps.api.app.api.stream import router as stream_router
 from apps.api.app.core.config import settings
 from apps.api.app.core.logging import setup_logging
 
@@ -34,6 +36,8 @@ app.add_middleware(
 app.include_router(health_router, prefix="/api")
 app.include_router(incidents_router, prefix="/api")
 app.include_router(events_router, prefix="/api")
+app.include_router(stream_router, prefix="/api")
+app.include_router(chaos_router, prefix="/api")
 
 
 @app.get("/")
