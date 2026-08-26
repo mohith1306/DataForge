@@ -1,18 +1,39 @@
-"""Verify node — verifies that remediation actions actually resolved the incident."""
+"""Verify node — verifies remediation with before/after comparison."""
 
 import logging
 
-from mcp.database.tools.schema import execute_select, profile_column
+from agent.agents.data_quality_agent import check_data_quality
 from mcp.monitoring.tools.pipelines import get_pipeline_status
 
 logger = logging.getLogger(__name__)
 
 
 async def verify_remediation(state: dict) -> dict:
-    """Verify that remediation was successful by checking data and pipeline state."""
+    """Verify remediation success with before/after comparison."""
     verification_results = []
 
-    # Check 1: Pipeline status
+    # Run comprehensive data quality check
+    try:
+        dq_result = await check_data_quality(state.get("incident_type", "unknown"))
+        dq_findings = dq_result.get("findings", [])
+
+        for f in dq_findings:
+            verification_results.append({
+                "metric": f"{f['type']}",
+                "before": _get_before_value(f["type"], state),
+                "after": f["summary"],
+                "status": "resolved" if f.get("passed") else "unresolved",
+            })
+    except Exception as e:
+        logger.error(f"Data quality check failed: {e}")
+        verification_results.append({
+            "metric": "data_quality_check",
+            "before": "unknown",
+            "after": f"Error: {e}",
+            "status": "error",
+        })
+
+    # Pipeline status check
     try:
         status = await get_pipeline_status()
         pipelines = status.get("pipelines", [])
@@ -21,7 +42,7 @@ async def verify_remediation(state: dict) -> dict:
         verification_results.append({
             "metric": "pipeline_health",
             "before": "FAILED",
-            "after": "HEALTHY" if pipeline_ok else "STILL_FAILED",
+            "after": "HEALTHY" if pipeline_ok else f"STILL_FAILED ({len(failed)})",
             "status": "resolved" if pipeline_ok else "unresolved",
         })
     except Exception as e:
@@ -29,87 +50,20 @@ async def verify_remediation(state: dict) -> dict:
         verification_results.append({
             "metric": "pipeline_health",
             "before": "FAILED",
-            "after": "UNKNOWN",
-            "status": "error",
-        })
-
-    # Check 2: Data quality — customer_region null rate
-    try:
-        profile = await profile_column("customer_orders", "customer_region")
-        null_rate = profile.get("null_rate", 0)
-        quality_ok = null_rate < 0.05
-        verification_results.append({
-            "metric": "customer_region_null_rate",
-            "before": "18.7%",
-            "after": f"{null_rate:.1%}",
-            "status": "resolved" if quality_ok else "unresolved",
-        })
-    except Exception as e:
-        logger.error(f"Data quality verification failed: {e}")
-        verification_results.append({
-            "metric": "customer_region_null_rate",
-            "before": "18.7%",
-            "after": "UNKNOWN",
-            "status": "error",
-        })
-
-    # Check 3: Revenue trend
-    try:
-        result = await execute_select(
-            "SELECT sum(revenue) as total_revenue, count() as days "
-            "FROM dataforge.revenue_daily "
-            "WHERE date >= today() - 7"
-        )
-        rows = result.get("rows", [])
-        if rows:
-            recent_revenue = rows[0].get("total_revenue", 0)
-            revenue_ok = recent_revenue > 1000000
-            if recent_revenue > 1000000:
-                rev_str = f"${recent_revenue / 1000000:.1f}M"
-            else:
-                rev_str = f"${recent_revenue:,.0f}"
-            verification_results.append({
-                "metric": "revenue_7day",
-                "before": "$12.7M",
-                "after": rev_str,
-                "status": "resolved" if revenue_ok else "unresolved",
-            })
-    except Exception as e:
-        logger.error(f"Revenue verification failed: {e}")
-        verification_results.append({
-            "metric": "revenue_7day",
-            "before": "$12.7M",
-            "after": "UNKNOWN",
-            "status": "error",
-        })
-
-    # Check 4: Record counts
-    try:
-        result = await execute_select(
-            "SELECT count() as cnt FROM dataforge.customer_orders"
-        )
-        rows = result.get("rows", [])
-        if rows:
-            count = rows[0].get("cnt", 0)
-            volume_ok = count > 3000
-            verification_results.append({
-                "metric": "record_count",
-                "before": "< 3000",
-                "after": f"{count:,}",
-                "status": "resolved" if volume_ok else "unresolved",
-            })
-    except Exception as e:
-        logger.error(f"Volume verification failed: {e}")
-        verification_results.append({
-            "metric": "record_count",
-            "before": "< 3000",
-            "after": "UNKNOWN",
+            "after": f"Error: {e}",
             "status": "error",
         })
 
     resolved = sum(1 for v in verification_results if v["status"] == "resolved")
     total = len(verification_results)
     overall = "resolved" if resolved == total else "partially_resolved"
+
+    # Build before/after summary
+    before_summary = {}
+    after_summary = {}
+    for v in verification_results:
+        before_summary[v["metric"]] = v["before"]
+        after_summary[v["metric"]] = v["after"]
 
     return {
         "status": "verifying",
@@ -118,6 +72,8 @@ async def verify_remediation(state: dict) -> dict:
             "overall_status": overall,
             "resolved_count": resolved,
             "total_count": total,
+            "before_summary": before_summary,
+            "after_summary": after_summary,
         },
         "events": state.get("events", []) + [
             {
@@ -130,3 +86,35 @@ async def verify_remediation(state: dict) -> dict:
             }
         ],
     }
+
+
+def _get_before_value(metric_type: str, state: dict) -> str:
+    """Get the before value from incident context."""
+    evidence = state.get("evidence", [])
+
+    # Try to extract before values from evidence
+    for e in evidence:
+        if e.get("source") == "database":
+            content = e.get("content", {})
+            if metric_type == "freshness" and "latest_date" in content:
+                return f"latest={content['latest_date']}"
+            if metric_type == "completeness" and "null_rate" in content:
+                return f"null_rate={content['null_rate']:.1%}"
+            if metric_type == "uniqueness" and "duplicate_rate" in content:
+                return f"dup_rate={content['duplicate_rate']:.1%}"
+            if metric_type == "volume" and "daily_counts" in content:
+                counts = content["daily_counts"]
+                return f"avg={sum(counts) / len(counts):.0f}" if counts else "unknown"
+            if metric_type == "distribution" and "apac_share" in content:
+                return f"APAC={content['apac_share']:.1%}"
+
+    # Default before values based on metric type
+    defaults = {
+        "freshness": "unknown",
+        "completeness": "degraded",
+        "uniqueness": "unknown",
+        "volume": "degraded",
+        "distribution": "imbalanced",
+        "pipeline_health": "FAILED",
+    }
+    return defaults.get(metric_type, "unknown")

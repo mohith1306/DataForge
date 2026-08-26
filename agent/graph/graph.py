@@ -1,4 +1,4 @@
-"""DataForge Agent — LangGraph workflow with conditional routing."""
+"""DataForge Agent — LangGraph workflow with sandbox and data quality checks."""
 from langgraph.graph import END, StateGraph
 
 from agent.graph.nodes.approval import approval_gate
@@ -7,6 +7,7 @@ from agent.graph.nodes.diagnose import diagnose
 from agent.graph.nodes.execute import execute_remediation
 from agent.graph.nodes.investigate import investigate
 from agent.graph.nodes.plan import plan_remediation
+from agent.graph.nodes.sandbox import sandbox_analysis
 from agent.graph.nodes.verify import verify_remediation
 from agent.graph.state import IncidentState
 
@@ -16,6 +17,14 @@ def route_after_investigation(state: IncidentState) -> str:
     evidence = state.get("evidence", [])
     if len(evidence) < 3:
         return "investigate"
+    return "sandbox"
+
+
+def route_after_sandbox(state: IncidentState) -> str:
+    """Route after sandbox analysis."""
+    analysis = state.get("analysis_results", {})
+    if analysis.get("error"):
+        return "diagnose"  # Continue even if sandbox fails
     return "diagnose"
 
 
@@ -28,16 +37,12 @@ def route_after_diagnosis(state: IncidentState) -> str:
 
 
 def route_after_approval(state: IncidentState) -> str:
-    """Route based on approval status.
-
-    When approval is required and pending, the workflow pauses (ends).
-    The API resumes the graph by updating state when approval is received.
-    """
+    """Route based on approval status."""
     approval_status = state.get("approval_status", "")
     if approval_status == "rejected":
         return "investigate"
     if approval_status == "pending":
-        return "end_pause"  # Pause workflow — API resumes later
+        return "end_pause"
     return "execute"
 
 
@@ -56,6 +61,7 @@ def build_graph() -> StateGraph:
     # Add nodes
     graph.add_node("classify", classify)
     graph.add_node("investigate", investigate)
+    graph.add_node("sandbox", sandbox_analysis)
     graph.add_node("diagnose", diagnose)
     graph.add_node("plan", plan_remediation)
     graph.add_node("approval", approval_gate)
@@ -65,20 +71,29 @@ def build_graph() -> StateGraph:
     # Set entry point
     graph.set_entry_point("classify")
 
-    # Edges
+    # classify → investigate
     graph.add_edge("classify", "investigate")
 
-    # Conditional: investigate → diagnose (or loop back for more evidence)
+    # investigate → sandbox (or loop back if not enough evidence)
     graph.add_conditional_edges(
         "investigate",
         route_after_investigation,
         {
             "investigate": "investigate",
+            "sandbox": "sandbox",
+        },
+    )
+
+    # sandbox → diagnose (always, even on error)
+    graph.add_conditional_edges(
+        "sandbox",
+        route_after_sandbox,
+        {
             "diagnose": "diagnose",
         },
     )
 
-    # Conditional: diagnose → plan (or loop back if low confidence)
+    # diagnose → plan (or loop back if low confidence)
     graph.add_conditional_edges(
         "diagnose",
         route_after_diagnosis,
@@ -88,10 +103,10 @@ def build_graph() -> StateGraph:
         },
     )
 
+    # plan → approval
     graph.add_edge("plan", "approval")
 
-    # Conditional: approval → execute (or pause if pending, or investigate if rejected)
-    # When pending, the graph pauses at END. The API resumes by re-invoking with updated state.
+    # approval → execute / investigate / pause
     graph.add_conditional_edges(
         "approval",
         route_after_approval,
@@ -102,9 +117,10 @@ def build_graph() -> StateGraph:
         },
     )
 
+    # execute → verify
     graph.add_edge("execute", "verify")
 
-    # Conditional: verify → END (or loop back if unresolved)
+    # verify → END (or loop back if unresolved)
     graph.add_conditional_edges(
         "verify",
         route_after_verify,

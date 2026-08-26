@@ -24,3 +24,4 @@ class IncidentState(TypedDict):
     incident_type: str
     severity: str
     business_impact: str
+    data_quality_results: dict[str, Any]
