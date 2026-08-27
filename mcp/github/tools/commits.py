@@ -5,7 +5,7 @@ import os
 import httpx
 
 GITHUB_API = "https://api.github.com"
-REPO = "mohith1306/DataForge"
+REPO = os.getenv("GITHUB_REPO", "mohith1306/DataForge")
 
 
 def _get_headers() -> dict:

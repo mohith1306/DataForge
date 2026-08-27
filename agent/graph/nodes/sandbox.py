@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 async def sandbox_analysis(state: dict) -> dict:
     """Generate and execute analysis code in the sandbox."""
     incident_type = state.get("incident_type", "unknown")
+    description = state.get("description", state.get("user_request", ""))
     evidence = state.get("evidence", [])
 
     # Build evidence summary for code generation
@@ -19,12 +20,13 @@ async def sandbox_analysis(state: dict) -> dict:
     )
 
     try:
-        # Generate analysis code
-        code = await generate_analysis_code(incident_type, evidence_summary)
+        # Generate analysis code using LLM
+        code = await generate_analysis_code(incident_type, evidence_summary, description)
 
         # Prepare context with evidence data
         context = {
             "incident_type": incident_type,
+            "description": description,
             "evidence": evidence,
             "evidence_summary": evidence_summary,
         }
