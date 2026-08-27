@@ -8,8 +8,10 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-CLICKHOUSE_URL = os.getenv("CLICKHOUSE_URL", "http://localhost:8123")
+CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "localhost")
+CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", "8123"))
 CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DATABASE", "dataforge")
+CLICKHOUSE_URL = f"http://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}"
 
 
 async def _query(sql: str) -> list[dict]:

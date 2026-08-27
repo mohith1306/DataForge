@@ -23,8 +23,10 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # ClickHouse settings
-CLICKHOUSE_URL = os.getenv("CLICKHOUSE_URL", "http://localhost:8123")
+CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "localhost")
+CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", "8123"))
 CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DATABASE", "dataforge")
+CLICKHOUSE_URL = f"http://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}"
 
 # External service settings
 AIRFLOW_URL = os.getenv("AIRFLOW_URL", "http://localhost:8080")
@@ -83,7 +85,7 @@ async def _airflow_trigger_dag(dag_id: str, conf: dict | None = None) -> dict:
     """Trigger an Airflow DAG run via REST API."""
     url = f"{AIRFLOW_URL}/api/v1/dags/{dag_id}/dagRuns"
     payload = {"conf": conf or {}}
-    async with httpx.AsyncClient(timeout=30, verify=False) as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             url,
             json=payload,
@@ -259,7 +261,7 @@ async def _jira_create_ticket(title: str, description: str, issue_type: str = "B
             "labels": ["data-quality", "auto-created"],
         }
     }
-    async with httpx.AsyncClient(timeout=15, verify=False) as client:
+    async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             url,
             json=payload,
@@ -353,12 +355,20 @@ async def rerun_pipeline(pipeline_id: str) -> dict:
 async def rollback_deployment(deployment_id: str = "v2.8.0") -> dict:
     """Rollback a deployment — tries K8s first, then returns manual instructions."""
     if K8S_ENABLED:
-        result = await _k8s_rollback_revision()
+        # Parse revision number from deployment_id if it looks like a version
+        revision = None
+        if deployment_id.startswith("v"):
+            try:
+                revision = int(deployment_id.split(".")[-1])
+            except (ValueError, IndexError):
+                pass
+        result = await _k8s_rollback_revision(revision=revision)
         if result.get("status") == "success":
             return {
                 "tool": "rollback_deployment",
                 "status": "success",
                 "deployment_id": deployment_id,
+                "revision": revision,
                 "message": result.get("message", "Deployment rolled back"),
                 "completed_at": datetime.now(UTC).isoformat(),
             }
@@ -381,32 +391,38 @@ async def create_incident_ticket(title: str, description: str) -> dict:
     """Create an incident ticket — tries PagerDuty, then Jira, then returns ID."""
     # Try PagerDuty first
     if PAGERDUTY_ENABLED:
-        pd_result = await _pagerduty_create_incident(title, description)
-        if pd_result.get("status") == "success":
-            return {
-                "tool": "create_incident_ticket",
-                "status": "success",
-                "ticket_id": pd_result.get("incident_key"),
-                "service": "pagerduty",
-                "title": title,
-                "message": pd_result.get("message"),
-                "created_at": datetime.now(UTC).isoformat(),
-            }
+        try:
+            pd_result = await _pagerduty_create_incident(title, description)
+            if pd_result.get("status") == "success":
+                return {
+                    "tool": "create_incident_ticket",
+                    "status": "success",
+                    "ticket_id": pd_result.get("incident_key"),
+                    "service": "pagerduty",
+                    "title": title,
+                    "message": pd_result.get("message"),
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+        except Exception as e:
+            logger.warning(f"PagerDuty failed, trying Jira: {e}")
 
     # Try Jira
     if JIRA_ENABLED:
-        jira_result = await _jira_create_ticket(title, description)
-        if jira_result.get("status") == "success":
-            return {
-                "tool": "create_incident_ticket",
-                "status": "success",
-                "ticket_id": jira_result.get("ticket_id"),
-                "ticket_url": jira_result.get("ticket_url"),
-                "service": "jira",
-                "title": title,
-                "message": jira_result.get("message"),
-                "created_at": datetime.now(UTC).isoformat(),
-            }
+        try:
+            jira_result = await _jira_create_ticket(title, description)
+            if jira_result.get("status") == "success":
+                return {
+                    "tool": "create_incident_ticket",
+                    "status": "success",
+                    "ticket_id": jira_result.get("ticket_id"),
+                    "ticket_url": jira_result.get("ticket_url"),
+                    "service": "jira",
+                    "title": title,
+                    "message": jira_result.get("message"),
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+        except Exception as e:
+            logger.warning(f"Jira failed, creating local ticket: {e}")
 
     # Fallback: generate ID with instructions
     ticket_id = f"DF-{uuid.uuid4().hex[:8].upper()}"
@@ -428,6 +444,16 @@ async def reprocess_partition(table: str, date_range: str = "last_5_days") -> di
     """Reprocess affected data partitions."""
     tbl = _validate_identifier(table)
 
+    # Count affected rows BEFORE the mutation
+    try:
+        count_rows = await _query(
+            f"SELECT count() as cnt FROM {CLICKHOUSE_DB}.{tbl} "
+            f"WHERE customer_region IS NULL"
+        )
+        rows_before = count_rows[0].get("cnt", 0) if count_rows else 0
+    except Exception:
+        rows_before = 0
+
     if tbl == "customer_orders":
         update_sql = (
             f"ALTER TABLE {CLICKHOUSE_DB}.{tbl} "
@@ -445,23 +471,13 @@ async def reprocess_partition(table: str, date_range: str = "last_5_days") -> di
         await _query(metric_sql)
         await _wait_for_mutation(2.0)
 
-    # Get actual affected row count
-    try:
-        rows = await _query(
-            f"SELECT count() as cnt FROM {CLICKHOUSE_DB}.{tbl} "
-            f"WHERE customer_region IS NULL OR customer_region = 'Unknown'"
-        )
-        affected = rows[0].get("cnt", 0) if rows else 0
-    except Exception:
-        affected = 0
-
     return {
         "tool": "reprocess_partition",
         "status": "success",
         "table": tbl,
         "date_range": date_range,
         "message": f"Table {tbl} reprocessed for {date_range}",
-        "partitions_affected": affected,
+        "rows_affected": rows_before,
         "completed_at": datetime.now(UTC).isoformat(),
     }
 

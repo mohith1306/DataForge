@@ -43,7 +43,8 @@ async def main():
 
         # Step 4: Check events
         print("\n[4/7] Checking investigation events...")
-        resp = await client.get(f"/incidents/{incident_id}/events")
+        resp = await client.get(f"/incidents/{incident_id}/events/")
+        resp.raise_for_status()
         events = resp.json()
         print(f"  Events count: {len(events)}")
         for e in events:

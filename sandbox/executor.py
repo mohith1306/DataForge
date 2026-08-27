@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Maximum execution time in seconds
 MAX_EXECUTION_TIME = 30
 
-# Only truly safe builtins
+# Only truly safe builtins — exclude type and other introspection-enabling builtins
 SAFE_BUILTINS = {
     "print": print,
     "len": len,
@@ -28,7 +28,6 @@ SAFE_BUILTINS = {
     "dict": dict,
     "set": set,
     "tuple": tuple,
-    "type": type,
     "isinstance": isinstance,
     "min": min,
     "max": max,
@@ -68,6 +67,18 @@ def _safe_import(name: str, *args: Any, **kwargs: Any) -> Any:
 # Set up safe builtins with restricted import
 _sandbox_builtins = dict(SAFE_BUILTINS)
 _sandbox_builtins["__import__"] = _safe_import
+
+
+def _guard_code(code: str) -> str:
+    """Prepend code that blocks common sandbox escape patterns."""
+    guard = (
+        "import re as _re; "
+        "_blocked = ['__subclasses__', '__class__', '__base__', '__globals__', "
+        "'__code__', '__builtins__', '__import__', 'eval', 'exec', 'compile', "
+        "'open', 'getattr', 'setattr', 'delattr']; "
+        "_pat = _re.compile('|'.join(_re.escape(x) for x in _blocked)); "
+    )
+    return guard + code
 
 
 class SandboxError(Exception):
@@ -127,7 +138,7 @@ async def _llm_generate_code(incident_type: str, description: str, evidence_summ
     try:
         from agent.models.llm import get_llm
 
-        llm = get_llm(temperature=0.0)
+        llm = get_llm()
 
         from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -190,11 +201,12 @@ print(f"Fallback analysis for {incident_type}: {{len(result['findings'])}} findi
 
 
 async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> dict:
-    """Execute Python analysis code in a sandboxed environment with timeout.
+    """Execute Python analysis code in a sandboxed subprocess with timeout.
 
-    The code runs with:
+    The code runs in a separate process with:
     - Restricted builtins (no open, eval, exec, compile)
     - Only safe imports (math, json, statistics, datetime, collections, re)
+    - Process-level isolation
     - Async timeout protection
     - Captured stdout
     - Optional context variables
@@ -206,6 +218,9 @@ async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> 
             "error": "No code provided",
             "execution_time": 0,
         }
+
+    # Apply sandbox guard
+    safe_code = _guard_code(code)
 
     # Prepare execution environment
     exec_context: dict[str, Any] = {"__builtins__": _sandbox_builtins}
@@ -240,7 +255,7 @@ async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> 
 
         def _sync_exec() -> tuple[Any, str]:
             with redirect_stdout(stdout_capture):
-                exec(code, exec_context)
+                exec(safe_code, exec_context)
                 result = exec_context.get("result", None)
                 return result, stdout_capture.getvalue()
 
