@@ -10,8 +10,8 @@ DataForge is an AI-driven data reliability platform that autonomously detects, i
 Incident Alert → Classify → Investigate → Sandbox → Diagnose → Plan → Approve → Execute → Verify
                      │            │           │          │         │         │          │
                      ▼            ▼           ▼          ▼         ▼         ▼          ▼
-                  LLM         MCP Tools   Python     LLM Plan   Risk     MCP Tools  DQ Checks
-                              (5 tools)   Code                  Check
+                  LLM         MCP Tools   LLM Code   LLM Plan   Risk     MCP Tools  DQ Checks
+                              (5 tools)   Generation          Check
 ```
 
 ### 6-Phase Pipeline
@@ -138,11 +138,13 @@ dataforge/
 - `get_pr_files(pr_number)` — Files changed in PR (paginated)
 
 ### Remediation
-- `rerun_pipeline(pipeline_id)` — Trigger re-execution
-- `reprocess_partition(table, date)` — Reprocess data partition
+- `rerun_pipeline(pipeline_id)` — Trigger real Airflow DAG rerun (or ClickHouse fallback)
+- `reprocess_partition(table, date)` — Reprocess data partition (real ALTER TABLE)
 - `validate_schema(table, expected)` — Schema validation
 - `backfill_missing(table, date_range)` — Fill missing data
 - `notify_stakeholders(incident, action)` — Send notifications
+- `rollback_deployment(deployment_id)` — Real Kubernetes rollout restart
+- `create_incident_ticket(title, description)` — Real PagerDuty/Jira ticket creation
 
 ## API Endpoints
 
@@ -207,11 +209,38 @@ uv run python scripts/security_check.py
 # Required
 GROQ_API_KEY=your_groq_key
 
-# Optional
+# ClickHouse
 CLICKHOUSE_HOST=localhost
 CLICKHOUSE_PORT=8123
 CLICKHOUSE_DATABASE=dataforge
+
+# PostgreSQL
 POSTGRES_URL=postgresql://user:pass@localhost:5432/dataforge
+
+# GitHub
+GITHUB_REPO=owner/repo
+GITHUB_TOKEN=your_token
+
+# Airflow (for pipeline rerun)
+AIRFLOW_URL=http://localhost:8080
+AIRFLOW_USERNAME=airflow
+AIRFLOW_PASSWORD=airflow
+
+# Kubernetes (for rollback)
+K8S_ENABLED=true
+K8S_NAMESPACE=dataforge
+K8S_DEPLOYMENT=dataforge-pipeline
+
+# PagerDuty (for ticketing)
+PAGERDUTY_ENABLED=true
+PAGERDUTY_ROUTING_KEY=your_routing_key
+
+# Jira (for ticketing)
+JIRA_ENABLED=true
+JIRA_URL=https://your-org.atlassian.net
+JIRA_EMAIL=you@company.com
+JIRA_API_TOKEN=your_token
+JIRA_PROJECT=DATA
 ```
 
 ## Qodo Code Review

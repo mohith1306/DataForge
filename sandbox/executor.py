@@ -1,4 +1,8 @@
-"""Sandbox — safe execution of generated Python analysis code."""
+"""Sandbox — safe execution of generated Python analysis code.
+
+Uses LLM to generate analysis code dynamically based on incident context,
+then executes it in a sandboxed environment with restricted builtins.
+"""
 
 import asyncio
 import io
@@ -69,6 +73,120 @@ _sandbox_builtins["__import__"] = _safe_import
 class SandboxError(Exception):
     """Raised when sandbox execution fails."""
     pass
+
+
+# ─── LLM Code Generation ─────────────────────────────────────────────────────
+
+
+CODEGEN_SYSTEM_PROMPT = """You are a Python code generator for data quality analysis.
+
+Generate ONLY valid Python code that analyzes the given incident.
+The code must:
+1. Use only standard library modules (json, math, statistics, datetime, collections, re)
+2. Set a variable called `result` with your analysis findings as a dict
+3. Use `print()` to output human-readable findings
+4. Be self-contained — no external dependencies
+
+Output format:
+- A Python code block that sets `result = {...}` with your findings
+- Include metrics, severity assessment, and recommended actions in the result dict
+
+Example output:
+```python
+result = {
+    "analysis_type": "schema_drift",
+    "findings": [
+        {"metric": "null_rate", "value": 0.15, "threshold": 0.05, "severity": "high"},
+    ],
+    "recommendations": ["Reprocess affected partitions", "Update schema validation"],
+    "confidence": 0.85
+}
+print(f"Analysis complete: {len(result['findings'])} findings")
+```
+"""
+
+CODEGEN_USER_PROMPT = """Analyze this data quality incident and generate Python code.
+
+Incident Type: {incident_type}
+Description: {description}
+
+Evidence collected:
+{evidence_summary}
+
+Generate Python code that:
+1. Analyzes the evidence to identify root cause patterns
+2. Calculates severity metrics based on the evidence
+3. Provides specific recommendations for remediation
+4. Sets the `result` variable with findings as a dict
+
+Code:"""
+
+
+async def _llm_generate_code(incident_type: str, description: str, evidence_summary: str) -> str:
+    """Generate analysis code using LLM."""
+    try:
+        from agent.models.llm import get_llm
+
+        llm = get_llm(temperature=0.0)
+
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        messages = [
+            SystemMessage(content=CODEGEN_SYSTEM_PROMPT),
+            HumanMessage(content=CODEGEN_USER_PROMPT.format(
+                incident_type=incident_type,
+                description=description,
+                evidence_summary=evidence_summary,
+            )),
+        ]
+
+        response = await llm.ainvoke(messages)
+        content = response.content
+
+        # Extract code block from response
+        if "```python" in content:
+            code = content.split("```python")[1].split("```")[0].strip()
+        elif "```" in content:
+            code = content.split("```")[1].split("```")[0].strip()
+        else:
+            # Try to find Python code by looking for common patterns
+            lines = content.split("\n")
+            code_lines = []
+            in_code = False
+            for line in lines:
+                if line.strip().startswith(("import ", "from ", "result", "print", "#")):
+                    in_code = True
+                if in_code:
+                    code_lines.append(line)
+            code = "\n".join(code_lines) if code_lines else content
+
+        # Ensure result is set
+        if "result" not in code:
+            code += '\nresult = {"status": "analysis_complete", "type": "' + incident_type + '"}'
+
+        return code
+
+    except Exception as e:
+        logger.error(f"LLM code generation failed: {e}")
+        return _fallback_code(incident_type, evidence_summary)
+
+
+def _fallback_code(incident_type: str, evidence_summary: str) -> str:
+    """Fallback code when LLM fails."""
+    return f"""import json
+
+result = {{
+    "analysis_type": "{incident_type}",
+    "findings": [],
+    "evidence_count": {len(evidence_summary.split(chr(10)))},
+    "source": "fallback_analysis",
+    "recommendations": ["Review evidence manually", "Check pipeline logs"]
+}}
+print(f"Fallback analysis for {incident_type}: {{len(result['findings'])}} findings")
+"""
+
+
+# ─── Sandbox Execution ────────────────────────────────────────────────────────
 
 
 async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> dict:
@@ -165,26 +283,7 @@ async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> 
 
 
 async def generate_analysis_code(
-    incident_type: str, evidence_summary: str
+    incident_type: str, evidence_summary: str, description: str = ""
 ) -> str:
-    """Generate Python analysis code for the given incident."""
-    templates = {
-        "schema_drift": (
-            "import json\n"
-            "results = {'analysis_type': 'schema_drift', 'findings': []}\n"
-            "results['findings'].append({'metric': 'null_rate_change', "
-            "'description': 'Schema drift caused null rate increase', 'severity': 'high'})\n"
-            "results['findings'].append({'metric': 'revenue_impact', "
-            "'description': 'APAC revenue dropped 42%%', 'severity': 'critical'})\n"
-            "result = results\n"
-            "print(f'Schema drift analysis: {len(results[\"findings\"])} findings')\n"
-        ),
-        "pipeline_failure": (
-            "results = {'analysis_type': 'pipeline_failure', 'findings': []}\n"
-            "results['findings'].append({'metric': 'pipeline_status', "
-            "'description': 'Pipeline PL-001 failed', 'severity': 'high'})\n"
-            "result = results\n"
-            "print(f'Pipeline failure analysis: {len(results[\"findings\"])} findings')\n"
-        ),
-    }
-    return templates.get(incident_type, templates["schema_drift"])
+    """Generate Python analysis code using LLM with fallback to templates."""
+    return await _llm_generate_code(incident_type, description or incident_type, evidence_summary)

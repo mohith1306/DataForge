@@ -2,13 +2,14 @@
 
 import json
 import logging
+import os
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-CLICKHOUSE_URL = "http://localhost:8123"
-CLICKHOUSE_DB = "dataforge"
+CLICKHOUSE_URL = os.getenv("CLICKHOUSE_URL", "http://localhost:8123")
+CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DATABASE", "dataforge")
 
 
 async def _query(sql: str) -> list[dict]:

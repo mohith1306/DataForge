@@ -6,11 +6,40 @@ class Settings(BaseSettings):
     app_name: str = "DataForge"
     app_version: str = "0.1.0"
     database_url: str = "postgresql+asyncpg://dataforge:dataforge@localhost:5432/dataforge"
+
+    # ClickHouse
     clickhouse_host: str = "localhost"
     clickhouse_port: int = 8123
     clickhouse_database: str = "dataforge"
+
+    # LLM
     groq_api_key: str = ""
     model_name: str = "llama-3.3-70b-versatile"
+
+    # GitHub
+    github_repo: str = "mohith1306/DataForge"
+    github_token: str = ""
+
+    # Airflow (for pipeline rerun)
+    airflow_url: str = "http://localhost:8080"
+    airflow_username: str = "airflow"
+    airflow_password: str = "airflow"
+
+    # Kubernetes (for rollback)
+    k8s_enabled: bool = False
+    k8s_namespace: str = "dataforge"
+    k8s_deployment: str = "dataforge-pipeline"
+
+    # PagerDuty (for ticketing)
+    pagerduty_enabled: bool = False
+    pagerduty_routing_key: str = ""
+
+    # Jira (for ticketing)
+    jira_enabled: bool = False
+    jira_url: str = ""
+    jira_email: str = ""
+    jira_api_token: str = ""
+    jira_project: str = "DATA"
 
     class Config:
         env_file = ".env"

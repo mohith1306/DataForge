@@ -1,6 +1,7 @@
 """GitHub Agent — investigates source code changes using real GitHub API."""
 
 import logging
+import os
 
 from mcp.github.tools.commits import (
     get_changed_files,
@@ -12,7 +13,7 @@ from mcp.github.tools.commits import (
 
 logger = logging.getLogger(__name__)
 
-REPO = "mohith1306/DataForge"
+REPO = os.getenv("GITHUB_REPO", "mohith1306/DataForge")
 
 # Default keywords if incident context doesn't match specific categories
 DEFAULT_KEYWORDS = ["schema", "region", "deploy", "data", "pipeline"]
