@@ -18,6 +18,7 @@ export default function IncidentDetail() {
   const pendingEventsRef = useRef([]);
 
   useEffect(() => {
+    console.log('[IncidentDetail] Mounted for incident:', id);
     loadedRef.current = false;
     eventIdsRef.current = new Set();
     pendingEventsRef.current = [];
@@ -26,45 +27,50 @@ export default function IncidentDetail() {
 
     // Subscribe to SSE — buffer events until snapshot loads
     const unsub = streamIncident(id, (event) => {
+      console.log('[IncidentDetail] SSE event received:', event.type);
       if (event.type === 'incident.updated') {
+        console.log('[IncidentDetail] Incident updated:', event.data?.status);
         setIncident(prev => ({ ...prev, ...event.data }));
       }
       if (event.type === 'event.created' && event.data) {
         const key = event.data.id || `${event.data.type}-${event.data.message}`;
         if (!eventIdsRef.current.has(key)) {
           eventIdsRef.current.add(key);
+          console.log('[IncidentDetail] New event:', event.data.type, event.data.message);
           if (loadedRef.current) {
-            // Snapshot already loaded — append directly
             setEvents(prev => [...prev, event.data]);
           } else {
-            // Snapshot not yet loaded — buffer for later merge
             pendingEventsRef.current.push(event.data);
           }
         }
       }
     });
 
-    return () => unsub();
+    return () => {
+      console.log('[IncidentDetail] Unmounted for incident:', id);
+      unsub();
+    };
   }, [id]);
 
   async function loadData() {
     try {
+      console.log('[IncidentDetail] Loading incident data:', id);
       const [inc, evts] = await Promise.all([
         fetchIncident(id),
         fetchEvents(id),
       ]);
       setIncident(inc);
-      // Index existing events for dedup
+      console.log('[IncidentDetail] Incident loaded:', inc.title, '| status:', inc.status);
       evts.forEach(e => {
         const key = e.id || `${e.type}-${e.message}`;
         eventIdsRef.current.add(key);
       });
-      // Merge snapshot with any buffered SSE events
       const merged = [...evts, ...pendingEventsRef.current];
       pendingEventsRef.current = [];
       setEvents(merged);
+      console.log('[IncidentDetail] Events loaded:', merged.length, 'events');
     } catch (err) {
-      console.error('Failed to load incident:', err);
+      console.error('[IncidentDetail] Failed to load:', err);
     } finally {
       setLoading(false);
       loadedRef.current = true;
@@ -72,18 +78,22 @@ export default function IncidentDetail() {
   }
 
   async function handleStartInvestigation() {
+    console.log('[IncidentDetail] Starting investigation for:', id);
     try {
       await startInvestigation(id);
+      console.log('[IncidentDetail] Investigation started successfully');
     } catch (err) {
-      console.error('Failed to start investigation:', err);
+      console.error('[IncidentDetail] Failed to start investigation:', err);
     }
   }
 
   async function handleRemediate() {
+    console.log('[IncidentDetail] Executing remediation for:', id);
     try {
       await executeRemediation(id);
+      console.log('[IncidentDetail] Remediation started successfully');
     } catch (err) {
-      console.error('Failed to execute remediation:', err);
+      console.error('[IncidentDetail] Failed to execute remediation:', err);
     }
   }
 
@@ -131,7 +141,10 @@ export default function IncidentDetail() {
           <button
             key={tab}
             className={`tab ${activeTab === tab ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => {
+              console.log('[IncidentDetail] Tab changed to:', tab);
+              setActiveTab(tab);
+            }}
           >
             {tab.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}
           </button>

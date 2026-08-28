@@ -8,7 +8,6 @@ export default function ApprovalUI({ events, incident }) {
   const planEvent = events?.find(e => e.type === 'plan.created');
   const approvalEvent = events?.find(e => e.type?.includes('approval'));
 
-  // Plan data may be in metadata_ or in a separate state property
   const plan = planEvent?.metadata_ || {};
 
   if (!planEvent && !approvalEvent) {
@@ -23,12 +22,15 @@ export default function ApprovalUI({ events, incident }) {
   }
 
   async function handleApproval(action) {
+    console.log('[ApprovalUI] User clicked:', action, '| incident:', incident.id);
     setApproving(true);
     setError(null);
     try {
-      await approveIncident(incident.id, action);
+      const result = await approveIncident(incident.id, action);
+      console.log('[ApprovalUI] Approval result:', result);
       window.location.reload();
     } catch (err) {
+      console.error('[ApprovalUI] Approval failed:', err);
       setError(err.message);
     } finally {
       setApproving(false);

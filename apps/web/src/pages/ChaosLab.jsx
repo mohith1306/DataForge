@@ -27,30 +27,38 @@ export default function ChaosLab() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    console.log('[ChaosLab] Mounted');
     loadFaults();
+    return () => console.log('[ChaosLab] Unmounted');
   }, []);
 
   async function loadFaults() {
     try {
+      console.log('[ChaosLab] Loading available faults');
       const data = await fetchFaults();
       setFaults(data.faults || []);
+      console.log('[ChaosLab] Loaded', (data.faults || []).length, 'faults');
     } catch (err) {
-      console.error('Failed to load faults:', err);
+      console.error('[ChaosLab] Failed to load faults:', err);
     } finally {
       setLoading(false);
     }
   }
 
   async function handleInject(faultType) {
+    console.log('[ChaosLab] Injecting fault:', faultType);
     setInjecting(faultType);
     setResult(null);
     try {
       const res = await injectChaos(faultType);
+      console.log('[ChaosLab] Fault injected:', res);
       setResult(res);
       if (res.incident_id) {
+        console.log('[ChaosLab] Navigating to incident in 2s:', res.incident_id);
         setTimeout(() => navigate(`/incidents/${res.incident_id}`), 2000);
       }
     } catch (err) {
+      console.error('[ChaosLab] Injection failed:', err);
       setResult({ status: 'error', message: err.message });
     } finally {
       setInjecting(null);
