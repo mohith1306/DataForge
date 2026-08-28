@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS incidents (
     severity VARCHAR(20) NOT NULL DEFAULT 'medium',
     status VARCHAR(30) NOT NULL DEFAULT 'created',
     incident_type VARCHAR(50),
+    trueforge_session_id VARCHAR(100),
+    verification_result TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     resolved_at TIMESTAMPTZ
 );
