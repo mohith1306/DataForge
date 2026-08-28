@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchIncidents, fetchStats } from '../api';
+import { fetchIncidents, fetchStats, startInvestigation, createIncident } from '../api';
 
 const SEVERITY_COLORS = {
   critical: '#ef4444',
@@ -26,6 +26,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState({ total: 0, open: 0, resolved: 0, critical: 0 });
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -35,7 +36,6 @@ export default function Dashboard() {
 
   async function loadData() {
     try {
-      // Fetch stats separately (unfiltered) and list with current filter
       const [statsData, listData] = await Promise.all([
         fetchStats(),
         fetchIncidents(filter !== 'all' ? { status: filter } : {}),
@@ -46,6 +46,23 @@ export default function Dashboard() {
       console.error('Failed to load incidents:', err);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleCreateIncident() {
+    setCreating(true);
+    try {
+      await createIncident({
+        title: 'APAC revenue dropped 42%',
+        severity: 'critical',
+        incident_type: 'volume_drop',
+        description: 'APAC region showing 42% revenue drop in last 5 days. Pipeline PL-001 failed.',
+      });
+      loadData();
+    } catch (err) {
+      console.error('Failed to create incident:', err);
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -73,16 +90,26 @@ export default function Dashboard() {
       <div className="card" style={{ marginTop: '1.5rem' }}>
         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>Incidents</span>
-          <div className="filter-group">
-            {['all', 'created', 'investigating', 'resolved'].map(s => (
-              <button
-                key={s}
-                className={`filter-btn ${filter === s ? 'active' : ''}`}
-                onClick={() => setFilter(s)}
-              >
-                {s.charAt(0).toUpperCase() + s.slice(1)}
-              </button>
-            ))}
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <div className="filter-group">
+              {['all', 'created', 'investigating', 'resolved'].map(s => (
+                <button
+                  key={s}
+                  className={`filter-btn ${filter === s ? 'active' : ''}`}
+                  onClick={() => setFilter(s)}
+                >
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+            </div>
+            <button
+              className="btn btn-primary"
+              style={{ padding: '0.375rem 0.75rem', fontSize: '0.8rem' }}
+              onClick={handleCreateIncident}
+              disabled={creating}
+            >
+              {creating ? 'Creating...' : '+ New Incident'}
+            </button>
           </div>
         </div>
 
@@ -98,30 +125,51 @@ export default function Dashboard() {
         ) : (
           <div className="incident-list">
             {incidents.map(inc => (
-              <Link to={`/incidents/${inc.id}`} key={inc.id} className="incident-row">
-                <div className="incident-main">
-                  <span
-                    className="severity-dot"
-                    style={{ background: SEVERITY_COLORS[inc.severity] || '#666' }}
-                  />
-                  <div>
-                    <div className="incident-title">{inc.title}</div>
-                    <div className="incident-meta">
-                      {inc.incident_type && <span className="incident-type">{inc.incident_type}</span>}
-                      <span>{new Date(inc.created_at).toLocaleString()}</span>
+              <div key={inc.id} className="incident-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Link to={`/incidents/${inc.id}`} style={{ flex: 1, textDecoration: 'none', color: 'inherit' }}>
+                  <div className="incident-main">
+                    <span
+                      className="severity-dot"
+                      style={{ background: SEVERITY_COLORS[inc.severity] || '#666' }}
+                    />
+                    <div>
+                      <div className="incident-title">{inc.title}</div>
+                      <div className="incident-meta">
+                        {inc.incident_type && <span className="incident-type">{inc.incident_type}</span>}
+                        <span>{new Date(inc.created_at).toLocaleString()}</span>
+                      </div>
                     </div>
                   </div>
+                </Link>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <span
+                    className="badge"
+                    style={{
+                      background: `${STATUS_COLORS[inc.status] || '#666'}20`,
+                      color: STATUS_COLORS[inc.status] || '#666',
+                    }}
+                  >
+                    {inc.status}
+                  </span>
+                  {inc.status === 'created' && (
+                    <button
+                      className="btn btn-primary"
+                      style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem' }}
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        try {
+                          await startInvestigation(inc.id);
+                          loadData();
+                        } catch (err) {
+                          console.error('Failed to start investigation:', err);
+                        }
+                      }}
+                    >
+                      Start
+                    </button>
+                  )}
                 </div>
-                <span
-                  className="badge"
-                  style={{
-                    background: `${STATUS_COLORS[inc.status] || '#666'}20`,
-                    color: STATUS_COLORS[inc.status] || '#666',
-                  }}
-                >
-                  {inc.status}
-                </span>
-              </Link>
+              </div>
             ))}
           </div>
         )}
