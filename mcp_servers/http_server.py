@@ -34,6 +34,9 @@ REPO = os.getenv("GITHUB_REPO", "mohith1306/DataForge")
 # Bug 7 fix: require auth token for write tools
 MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN", "")
 
+# Gap 9: Demo mode — remediation targets controlled resources
+DATAFORGE_ENV = os.getenv("DATAFORGE_ENV", "demo")
+
 WRITE_TOOLS = {"rerun_pipeline", "rollback_deployment", "create_incident_ticket"}
 
 IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -172,6 +175,17 @@ TOOLS = [
                 "state": {"type": "string", "default": "all"},
                 "limit": {"type": "integer", "default": 20},
             },
+        },
+    },
+    {
+        "name": "get_changed_files",
+        "description": "Get files changed in a pull request",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr_number": {"type": "integer", "description": "PR number"},
+            },
+            "required": ["pr_number"],
         },
     },
     {
@@ -344,37 +358,85 @@ async def execute_tool(name: str, args: dict) -> Any:
             ]
             return {"pull_requests": prs, "count": len(prs)}
 
+    elif name == "get_changed_files":
+        pr_number = args["pr_number"]
+        url = f"{GITHUB_API}/repos/{REPO}/pulls/{pr_number}/files"
+        all_files = []
+        page = 1
+        async with httpx.AsyncClient(timeout=30) as client:
+            while True:
+                resp = await client.get(
+                    url,
+                    params={"per_page": 100, "page": page},
+                    headers=_get_github_headers(),
+                )
+                if resp.status_code != 200:
+                    if page == 1:
+                        return {"files": [], "error": resp.text}
+                    break
+                data = resp.json()
+                if not data:
+                    break
+                for f in data:
+                    all_files.append({
+                        "filename": f["filename"],
+                        "status": f["status"],
+                        "additions": f["additions"],
+                        "deletions": f["deletions"],
+                        "changes": f["changes"],
+                    })
+                if len(data) < 100:
+                    break
+                page += 1
+        return {
+            "files": all_files,
+            "count": len(all_files),
+            "truncated": False,
+        }
+
     elif name == "rerun_pipeline":
         pid = _validate_identifier(args["pipeline_id"])
-        try:
-            url = f"{AIRFLOW_URL}/api/v1/dags/{pid}/dagRuns"
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    url,
-                    json={"conf": {"rerun": True}},
-                    auth=(AIRFLOW_USERNAME, AIRFLOW_PASSWORD),
-                )
-                if resp.status_code in (200, 201):
-                    data = resp.json()
+        # Gap 9: Demo mode — simulate without real mutation
+        if DATAFORGE_ENV == "demo":
+            return {
+                "status": "success",
+                "pipeline_id": pid,
+                "message": "Simulated pipeline rerun (DEMO MODE — no real mutation)",
+                "dag_run_id": f"demo-run-{pid}",
+                "environment": "demo",
+            }
+        else:
+            # Production mode — actual Airflow call
+            try:
+                url = f"{AIRFLOW_URL}/api/v1/dags/{pid}/dagRuns"
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.post(
+                        url,
+                        json={"conf": {"rerun": True}},
+                        auth=(AIRFLOW_USERNAME, AIRFLOW_PASSWORD),
+                    )
+                    if resp.status_code in (200, 201):
+                        data = resp.json()
+                        return {
+                            "status": "success",
+                            "pipeline_id": pid,
+                            "message": "Triggered via Airflow",
+                            "dag_run_id": data.get("dag_run_id"),
+                            "environment": "production",
+                        }
                     return {
-                        "status": "success",
+                        "status": "failed",
                         "pipeline_id": pid,
-                        "message": "Triggered via Airflow",
-                        "dag_run_id": data.get("dag_run_id"),
+                        "message": f"Airflow returned {resp.status_code}: {resp.text[:500]}",
+                        "environment": "production",
                     }
-                # Bug 8 fix: return actual failure status
+            except Exception as e:
                 return {
                     "status": "failed",
                     "pipeline_id": pid,
-                    "message": f"Airflow returned {resp.status_code}: {resp.text[:500]}",
+                    "message": f"Airflow request failed: {e}",
+                    "environment": "production",
                 }
-        except Exception as e:
-            # Bug 8 fix: return actual error
-            return {
-                "status": "failed",
-                "pipeline_id": pid,
-                "message": f"Airflow request failed: {e}",
-            }
 
     elif name == "rollback_deployment":
         did = args.get("deployment_id", "v2.8.0")

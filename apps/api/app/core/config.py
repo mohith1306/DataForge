@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     jira_api_token: str = ""
     jira_project: str = "DATA"
 
+    # Gap 9: Demo mode — remediation targets controlled/test resources
+    dataforge_env: str = "demo"  # "demo" or "production"
+
     class Config:
         env_file = ".env"
 

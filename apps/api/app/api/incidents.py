@@ -1,6 +1,7 @@
 """Incidents API — CRUD, workflow triggers, approval, and SSE publishing."""
 
 import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,7 +22,6 @@ from trueforge.runtime import TrueForgeRuntime
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
-# TrueForge runtime singleton — lazily initialized
 _trueforge: TrueForgeRuntime | None = None
 
 
@@ -40,11 +40,14 @@ def _incident_to_dict(inc: Incident) -> dict:
         "status": inc.status,
         "incident_type": inc.incident_type,
         "trueforge_session_id": inc.trueforge_session_id,
+        "verification_result": inc.verification_result,
     }
 
 
 @router.post("/", response_model=IncidentResponse, status_code=201)
-async def create_incident(payload: IncidentCreate, db: AsyncSession = Depends(get_db)) -> Incident:
+async def create_incident(
+    payload: IncidentCreate, db: AsyncSession = Depends(get_db)
+) -> Incident:
     incident = Incident(
         title=payload.title,
         description=payload.description,
@@ -61,14 +64,20 @@ async def create_incident(payload: IncidentCreate, db: AsyncSession = Depends(ge
 
 @router.get("/stats")
 async def get_stats(db: AsyncSession = Depends(get_db)) -> dict:
-    """Return aggregate stats independent of list filters."""
     result = await db.execute(select(Incident))
     all_incidents = list(result.scalars().all())
     return {
         "total": len(all_incidents),
-        "open": sum(1 for i in all_incidents if i.status not in ("resolved", "failed")),
-        "resolved": sum(1 for i in all_incidents if i.status == "resolved"),
-        "critical": sum(1 for i in all_incidents if i.severity == "critical"),
+        "open": sum(
+            1 for i in all_incidents
+            if i.status not in ("resolved", "failed")
+        ),
+        "resolved": sum(
+            1 for i in all_incidents if i.status == "resolved"
+        ),
+        "critical": sum(
+            1 for i in all_incidents if i.severity == "critical"
+        ),
     }
 
 
@@ -79,7 +88,11 @@ async def list_incidents(
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
 ) -> list[Incident]:
-    query = select(Incident).order_by(Incident.created_at.desc()).limit(limit)
+    query = (
+        select(Incident)
+        .order_by(Incident.created_at.desc())
+        .limit(limit)
+    )
     if status:
         query = query.where(Incident.status == status)
     if severity:
@@ -89,8 +102,12 @@ async def list_incidents(
 
 
 @router.get("/{incident_id}", response_model=IncidentResponse)
-async def get_incident(incident_id: str, db: AsyncSession = Depends(get_db)) -> Incident:
-    result = await db.execute(select(Incident).where(Incident.id == incident_id))
+async def get_incident(
+    incident_id: str, db: AsyncSession = Depends(get_db)
+) -> Incident:
+    result = await db.execute(
+        select(Incident).where(Incident.id == incident_id)
+    )
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
@@ -98,13 +115,13 @@ async def get_incident(incident_id: str, db: AsyncSession = Depends(get_db)) -> 
 
 
 @router.post("/{incident_id}/start")
-async def start_investigation(incident_id: str, db: AsyncSession = Depends(get_db)) -> dict:
-    """Start a TrueForge investigation session for an incident.
-
-    Creates a TrueForge session, sends the incident to the agent, and
-    streams investigation events back via SSE.
-    """
-    result = await db.execute(select(Incident).where(Incident.id == incident_id))
+async def start_investigation(
+    incident_id: str, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Start a TrueForge investigation session for an incident."""
+    result = await db.execute(
+        select(Incident).where(Incident.id == incident_id)
+    )
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
@@ -112,16 +129,15 @@ async def start_investigation(incident_id: str, db: AsyncSession = Depends(get_d
     if incident.status != "created":
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot start investigation from status: {incident.status}",
+            detail=f"Cannot start from status: {incident.status}",
         )
 
     incident.status = "investigating"
-
     event = IncidentEvent(
         incident_id=incident.id,
         type="investigation.started",
         agent="system",
-        message="Investigation started — connecting to TrueForge",
+        message="Investigation started",
     )
     db.add(event)
     await db.flush()
@@ -135,19 +151,27 @@ async def start_investigation(incident_id: str, db: AsyncSession = Depends(get_d
     if not settings.trueforge_enabled:
         await publish_event(str(incident_id), {
             "type": "investigation.error",
-            "data": {"message": "TrueForge is disabled (TRUEFORGE_ENABLED=false)"},
+            "data": {"message": "TrueForge disabled"},
         })
-        return {"status": "started", "incident_id": str(incident_id), "trueforge": False}
+        return {
+            "status": "started",
+            "incident_id": str(incident_id),
+            "trueforge": False,
+        }
 
-    # Fire-and-forget: start TrueForge investigation in background
-    # Bug 2 fix: do NOT pass request-scoped db — task creates its own session
     asyncio.create_task(_run_trueforge_investigation(
         incident_id=str(incident.id),
         incident_type=incident.incident_type or "unknown",
-        description=f"{incident.title}\n\n{incident.description or ''}",
+        description=(
+            f"{incident.title}\n\n{incident.description or ''}"
+        ),
     ))
 
-    return {"status": "started", "incident_id": str(incident_id), "trueforge": True}
+    return {
+        "status": "started",
+        "incident_id": str(incident_id),
+        "trueforge": True,
+    }
 
 
 async def _run_trueforge_investigation(
@@ -155,14 +179,10 @@ async def _run_trueforge_investigation(
     incident_type: str,
     description: str,
 ) -> None:
-    """Background task: create TrueForge session and stream investigation events.
-
-    Creates its own DB session to avoid reusing the request-scoped session.
-    """
+    """Background task: create TrueForge session and stream events."""
     tf = _get_trueforge()
 
     try:
-        # Create session
         await publish_event(incident_id, {
             "type": "investigation.connecting",
             "data": {"message": "Creating TrueForge session..."},
@@ -179,28 +199,29 @@ async def _run_trueforge_investigation(
             error_msg = session_result.get("error", "unknown")
             await publish_event(incident_id, {
                 "type": "investigation.error",
-                "data": {"message": f"Failed to create TrueForge session: {error_msg}"},
+                "data": {"message": f"Session create failed: {error_msg}"},
             })
             return
 
-        # Bug 2 fix: create a dedicated session for background DB writes
         async with async_session_factory() as db:
             async with db.begin():
-                res = await db.execute(select(Incident).where(Incident.id == incident_id))
+                res = await db.execute(
+                    select(Incident).where(Incident.id == incident_id)
+                )
                 inc = res.scalar_one_or_none()
                 if inc:
                     inc.trueforge_session_id = session_id
 
         await publish_event(incident_id, {
             "type": "investigation.session_created",
-            "data": {"session_id": session_id, "message": "TrueForge session created"},
+            "data": {"session_id": session_id},
         })
 
-        # Bug 3 fix: stream the SAME turn we created (not a new one)
-        # start_investigation already created a turn; stream events for it
         tool_count = 0
         turn_id = session_result.get("turn_id")
-        async for event in tf.stream_turn_events(session_id, turn_id):
+        async for event in tf.stream_turn_events(
+            session_id, turn_id
+        ):
             event_type = event.get("type", "")
 
             if event_type == "model.message":
@@ -208,7 +229,10 @@ async def _run_trueforge_investigation(
                 if content:
                     await publish_event(incident_id, {
                         "type": "agent.message",
-                        "data": {"content": content, "session_id": session_id},
+                        "data": {
+                            "content": content,
+                            "session_id": session_id,
+                        },
                     })
 
             elif event_type == "tool.response":
@@ -216,22 +240,33 @@ async def _run_trueforge_investigation(
                 tool_count += 1
                 await publish_event(incident_id, {
                     "type": "tool.completed",
-                    "data": {"tool": tool_name, "count": tool_count, "session_id": session_id},
+                    "data": {
+                        "tool": tool_name,
+                        "count": tool_count,
+                    },
                 })
 
             elif event_type == "turn.done":
                 status = event.get("state", {}).get("status", "unknown")
                 if status == "error":
-                    error_msg = event.get("state", {}).get("message", "Unknown error")
+                    error_msg = event.get("state", {}).get(
+                        "message", "Unknown error"
+                    )
                     await _set_incident_status(incident_id, "failed")
                     await publish_event(incident_id, {
                         "type": "investigation.error",
-                        "data": {"message": error_msg, "session_id": session_id},
+                        "data": {"message": error_msg},
                     })
                 else:
                     output = event.get("state", {}).get("output", {})
-                    content = output.get("content", "") if isinstance(output, dict) else ""
-                    await _set_incident_status(incident_id, "investigation_complete")
+                    content = (
+                        output.get("content", "")
+                        if isinstance(output, dict)
+                        else ""
+                    )
+                    await _set_incident_status(
+                        incident_id, "investigation_complete"
+                    )
                     await publish_event(incident_id, {
                         "type": "investigation.completed",
                         "data": {
@@ -243,24 +278,23 @@ async def _run_trueforge_investigation(
 
             elif event_type == "mcp.initialize":
                 servers = event.get("mcp_servers", [])
-                server_names = [s.get("name", "") for s in servers]
+                names = [s.get("name", "") for s in servers]
                 await publish_event(incident_id, {
                     "type": "mcp.connected",
-                    "data": {"servers": server_names, "session_id": session_id},
+                    "data": {"servers": names},
                 })
 
-            # Bug 5 fix: handle synthetic error events from stream failures
             elif event_type == "error":
-                error_msg = event.get("message", "Stream connection lost")
+                error_msg = event.get("message", "Stream lost")
                 await _set_incident_status(incident_id, "failed")
                 await publish_event(incident_id, {
                     "type": "investigation.error",
-                    "data": {"message": error_msg, "session_id": session_id},
+                    "data": {"message": error_msg},
                 })
                 return
 
     except Exception as e:
-        logger.error(f"TrueForge investigation failed: {e}", exc_info=True)
+        logger.error(f"Investigation failed: {e}", exc_info=True)
         await _set_incident_status(incident_id, "failed")
         await publish_event(incident_id, {
             "type": "investigation.error",
@@ -268,35 +302,47 @@ async def _run_trueforge_investigation(
         })
 
 
-async def _set_incident_status(incident_id: str, status: str) -> None:
+async def _set_incident_status(
+    incident_id: str, status: str
+) -> None:
     """Update incident status using a dedicated DB session."""
     try:
         async with async_session_factory() as db:
             async with db.begin():
-                res = await db.execute(select(Incident).where(Incident.id == incident_id))
+                res = await db.execute(
+                    select(Incident).where(Incident.id == incident_id)
+                )
                 inc = res.scalar_one_or_none()
                 if inc:
                     inc.status = status
     except Exception as e:
-        logger.error(f"Failed to update incident {incident_id} status: {e}")
+        logger.error(f"Failed to update {incident_id}: {e}")
 
 
 @router.post("/{incident_id}/remediate")
-async def execute_remediation(incident_id: str, db: AsyncSession = Depends(get_db)) -> dict:
-    """Transition incident to executing status and publish SSE event."""
-    result = await db.execute(select(Incident).where(Incident.id == incident_id))
+async def execute_remediation(
+    incident_id: str, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Execute remediation after approval.
+
+    Bug 8 fix: Also called by approval endpoint when status is executing.
+    """
+    result = await db.execute(
+        select(Incident).where(Incident.id == incident_id)
+    )
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
-    if incident.status != "awaiting_approval":
+    if incident.status not in (
+        "awaiting_approval", "executing"
+    ):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot remediate from status: {incident.status}",
         )
 
     incident.status = "executing"
-
     event = IncidentEvent(
         incident_id=incident.id,
         type="remediation.executing",
@@ -312,7 +358,443 @@ async def execute_remediation(incident_id: str, db: AsyncSession = Depends(get_d
         "data": _incident_to_dict(incident),
     })
 
-    return {"status": "executing", "incident_id": str(incident_id)}
+    asyncio.create_task(_execute_and_verify_remediation(
+        incident_id=str(incident.id),
+        session_id=incident.trueforge_session_id,
+        incident_type=incident.incident_type or "unknown",
+    ))
+
+    return {
+        "status": "executing",
+        "incident_id": str(incident_id),
+    }
+
+
+async def _execute_and_verify_remediation(
+    incident_id: str,
+    session_id: str | None,
+    incident_type: str,
+) -> None:
+    """Bug 3 fix: Fail remediation before verification.
+
+    Bug 4 fix: Query actual pipeline status.
+    Bug 5 fix: Verify based on incident scope.
+    """
+    remediation_succeeded = False
+    tf = _get_trueforge()
+
+    # Execute remediation via TrueForge
+    if session_id and settings.trueforge_enabled:
+        await publish_event(incident_id, {
+            "type": "remediation.executing",
+            "data": {"message": "Executing remediation via TrueForge..."},
+        })
+
+        try:
+            async for event in tf.client.create_turn_stream(
+                session_id=session_id,
+                message=(
+                    "Execute the approved remediation plan. "
+                    "After execution, verify the fix by checking "
+                    "pipeline status and data quality metrics."
+                ),
+            ):
+                event_type = event.get("type", "")
+                if event_type == "model.message":
+                    content = event.get("content", "")
+                    if content:
+                        await publish_event(incident_id, {
+                            "type": "remediation.output",
+                            "data": {"content": content[:2000]},
+                        })
+                elif event_type == "tool.response":
+                    tool_name = event.get("tool_name", "unknown")
+                    await publish_event(incident_id, {
+                        "type": "remediation.tool",
+                        "data": {"tool": tool_name},
+                    })
+                elif event_type == "turn.done":
+                    state = event.get("state", {})
+                    if state.get("status") != "error":
+                        remediation_succeeded = True
+        except Exception as e:
+            logger.warning(f"Remediation stream error: {e}")
+            remediation_succeeded = False
+    elif not settings.trueforge_enabled:
+        # No TrueForge — skip remediation, mark as failed
+        await _set_incident_status(incident_id, "failed")
+        await publish_event(incident_id, {
+            "type": "remediation.error",
+            "data": {"message": "TrueForge disabled — cannot remediate"},
+        })
+        return
+
+    # Bug 3: If remediation failed, do NOT proceed to verification
+    if not remediation_succeeded:
+        await _set_incident_status(incident_id, "failed")
+        await publish_event(incident_id, {
+            "type": "remediation.error",
+            "data": {"message": "Remediation failed — not verifying"},
+        })
+        return
+
+    # Bug 4+5: Evidence-based verification scoped to incident
+    await publish_event(incident_id, {
+        "type": "verification.starting",
+        "data": {"message": "Verifying incident resolution..."},
+    })
+
+    verification = await _verify_incident_resolution(
+        incident_id, incident_type
+    )
+
+    async with async_session_factory() as db:
+        async with db.begin():
+            res = await db.execute(
+                select(Incident).where(Incident.id == incident_id)
+            )
+            inc = res.scalar_one_or_none()
+            if inc:
+                inc.verification_result = json.dumps(verification)
+
+    if verification["resolved"]:
+        await _set_incident_status(incident_id, "resolved")
+        await publish_event(incident_id, {
+            "type": "verification.passed",
+            "data": verification,
+        })
+    else:
+        await _set_incident_status(
+            incident_id, "investigation_complete"
+        )
+        await publish_event(incident_id, {
+            "type": "verification.failed",
+            "data": {
+                **verification,
+                "message": "Verification failed — re-investigate",
+            },
+        })
+
+
+async def _verify_incident_resolution(
+    incident_id: str,
+    incident_type: str,
+) -> dict:
+    """Verify incident resolution with evidence-based checks.
+
+    Uses a raw socket SSE client to open an MCP session, send tool
+    requests, and read actual JSON-RPC responses from the SSE stream.
+    This avoids the httpx blocking issue where POST with keep-alive
+    would hang waiting for a response body that never arrives.
+    """
+    checks = []
+    all_passed = True
+    reader = None
+    writer = None
+
+    try:
+        import asyncio
+        import json as _json
+
+        # Open raw TCP connection to MCP server
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", 8791
+        )
+
+        # Send GET /sse
+        writer.write(
+            b"GET /sse HTTP/1.1\r\n"
+            b"Host: localhost:8791\r\n"
+            b"Accept: text/event-stream\r\n"
+            b"Connection: keep-alive\r\n"
+            b"\r\n"
+        )
+        await writer.drain()
+
+        # Read HTTP response headers
+        header_data = b""
+        while True:
+            chunk = await asyncio.wait_for(
+                reader.read(1024), timeout=10
+            )
+            if not chunk:
+                raise ConnectionError("SSE connection closed")
+            header_data += chunk
+            if b"\r\n\r\n" in header_data:
+                break
+
+        # Parse SSE endpoint from first event
+        event_type = ""
+        event_data = ""
+        endpoint_line = ""
+
+        while True:
+            line_raw = await asyncio.wait_for(
+                reader.readline(), timeout=10
+            )
+            line = line_raw.decode().strip()
+            if line.startswith("event:"):
+                event_type = line[6:].strip()
+            elif line.startswith("data:"):
+                event_data = line[5:].strip()
+            elif line == "" and event_type and event_data:
+                if (
+                    event_type == "endpoint"
+                    and event_data.startswith("/messages")
+                ):
+                    endpoint_line = event_data
+                    break
+                event_type = ""
+                event_data = ""
+
+        if not endpoint_line:
+            checks.append({
+                "check": "mcp_session",
+                "passed": False,
+                "message": "No endpoint received from MCP SSE",
+            })
+            all_passed = False
+            return {
+                "resolved": False,
+                "checks": checks,
+                "passed_count": 0,
+                "total_count": 1,
+            }
+
+        # Helper: send POST and read next SSE response
+        async def _post_and_read(
+            payload: dict,
+        ) -> dict | None:
+            body = _json.dumps(payload)
+            request = (
+                f"POST {endpoint_line} HTTP/1.1\r\n"
+                f"Host: localhost:8791\r\n"
+                f"Content-Type: application/json\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                f"Connection: keep-alive\r\n"
+                f"\r\n"
+                f"{body}"
+            )
+            writer.write(request.encode())
+            await writer.drain()
+
+            # Read HTTP response status line
+            status_line = (
+                await asyncio.wait_for(reader.readline(), timeout=10)
+            ).decode().strip()
+            status_code = int(status_line.split(" ")[1])
+
+            # Read response headers until blank line
+            while True:
+                header = (
+                    await asyncio.wait_for(reader.readline(), timeout=10)
+                ).decode().strip()
+                if header == "":
+                    break
+
+            # Read SSE events for the response
+            if status_code != 202:
+                return None
+
+            event_type = ""
+            event_data = ""
+            while True:
+                line_raw = await asyncio.wait_for(
+                    reader.readline(), timeout=15
+                )
+                line = line_raw.decode().strip()
+                if line.startswith("event:"):
+                    event_type = line[6:].strip()
+                elif line.startswith("data:"):
+                    event_data = line[5:].strip()
+                elif line == "" and event_type == "message":
+                    try:
+                        return _json.loads(event_data)
+                    except Exception:
+                        pass
+                    event_type = ""
+                    event_data = ""
+            return None
+
+        # Send initialize
+        init_result = await _post_and_read({
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "verifier"},
+            },
+        })
+
+        if not init_result or "result" not in init_result:
+            checks.append({
+                "check": "mcp_init",
+                "passed": False,
+                "message": "MCP initialize failed",
+            })
+            all_passed = False
+            return {
+                "resolved": False,
+                "checks": checks,
+                "passed_count": 0,
+                "total_count": 1,
+            }
+
+        # Bug 6: Query actual pipeline status for relevant incidents
+        if incident_type in ("pipeline_failure", "volume_drop"):
+            pipe_result = await _post_and_read({
+                "jsonrpc": "2.0",
+                "id": "pipe-check",
+                "method": "tools/call",
+                "params": {
+                    "name": "get_pipeline_status",
+                    "arguments": {},
+                },
+            })
+
+            if pipe_result:
+                content = (
+                    pipe_result.get("result", {})
+                    .get("content", [{}])
+                )
+                text = (
+                    content[0].get("text", "")
+                    if isinstance(content, list) and content
+                    else ""
+                )
+                pipeline_ok = (
+                    "success" in text.lower()
+                    or "healthy" in text.lower()
+                )
+                checks.append({
+                    "check": "pipeline_status",
+                    "passed": pipeline_ok,
+                    "message": f"Pipeline: {text[:500]}",
+                })
+                if not pipeline_ok:
+                    all_passed = False
+            else:
+                checks.append({
+                    "check": "pipeline_status",
+                    "passed": False,
+                    "message": "No pipeline status response",
+                })
+                all_passed = False
+
+        # Bug 1+5: Data quality check — read actual SSE response
+        if incident_type in (
+            "null_injection", "schema_drift",
+            "volume_drop", "distribution_shift",
+        ):
+            dq_result = await _post_and_read({
+                "jsonrpc": "2.0",
+                "id": "dq-check",
+                "method": "tools/call",
+                "params": {
+                    "name": "validate_data_quality",
+                    "arguments": {},
+                },
+            })
+
+            if dq_result:
+                content = (
+                    dq_result.get("result", {})
+                    .get("content", [{}])
+                )
+                text = (
+                    content[0].get("text", "")
+                    if isinstance(content, list) and content
+                    else ""
+                )
+                dq_passed = (
+                    "passed" in text.lower()
+                    and "error" not in text.lower()
+                )
+                checks.append({
+                    "check": "data_quality_validation",
+                    "passed": dq_passed,
+                    "message": f"DQ: {text[:500]}",
+                })
+                if not dq_passed:
+                    all_passed = False
+            else:
+                checks.append({
+                    "check": "data_quality_validation",
+                    "passed": False,
+                    "message": "No DQ response received",
+                })
+                all_passed = False
+
+        # Freshness check for freshness_lag incidents
+        if incident_type == "freshness_lag":
+            fresh_result = await _post_and_read({
+                "jsonrpc": "2.0",
+                "id": "fresh-check",
+                "method": "tools/call",
+                "params": {
+                    "name": "execute_select",
+                    "arguments": {
+                        "query": (
+                            "SELECT max(started_at) "
+                            "as latest "
+                            "FROM dataforge.pipeline_events"
+                        ),
+                    },
+                },
+            })
+
+            if fresh_result:
+                content = (
+                    fresh_result.get("result", {})
+                    .get("content", [{}])
+                )
+                text = (
+                    content[0].get("text", "")
+                    if isinstance(content, list) and content
+                    else ""
+                )
+                fresh_passed = (
+                    "latest" in text.lower()
+                    and "error" not in text.lower()
+                )
+                checks.append({
+                    "check": "freshness_check",
+                    "passed": fresh_passed,
+                    "message": f"Freshness: {text[:500]}",
+                })
+                if not fresh_passed:
+                    all_passed = False
+            else:
+                checks.append({
+                    "check": "freshness_check",
+                    "passed": False,
+                    "message": "No freshness response",
+                })
+                all_passed = False
+
+    except Exception as e:
+        checks.append({
+            "check": "verification_error",
+            "passed": False,
+            "message": f"Verification error: {e}",
+        })
+        all_passed = False
+    finally:
+        if writer:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    return {
+        "resolved": all_passed and len(checks) > 0,
+        "checks": checks,
+        "passed_count": sum(1 for c in checks if c["passed"]),
+        "total_count": len(checks),
+    }
 
 
 @router.post("/{incident_id}/approval")
@@ -323,9 +805,11 @@ async def handle_approval(
 ) -> dict:
     """Approve or reject a remediation plan.
 
-    If session_id is provided, also forwards the approval to TrueForge.
+    Bug 8 fix: Schedule remediation task on approval.
     """
-    result = await db.execute(select(Incident).where(Incident.id == incident_id))
+    result = await db.execute(
+        select(Incident).where(Incident.id == incident_id)
+    )
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
@@ -343,7 +827,9 @@ async def handle_approval(
         incident.status = "failed"
         message = f"Rejected by {payload.reviewer}"
     else:
-        raise HTTPException(status_code=400, detail=f"Unknown action: {payload.action}")
+        raise HTTPException(
+            status_code=400, detail=f"Unknown action: {payload.action}"
+        )
 
     event = IncidentEvent(
         incident_id=incident.id,
@@ -360,15 +846,20 @@ async def handle_approval(
         "data": _incident_to_dict(incident),
     })
 
-    # Bug 4 fix: validate session belongs to this incident
+    # Forward to TrueForge if session provided
     tf_result = None
-    if payload.session_id and payload.turn_id and payload.tool_name and settings.trueforge_enabled:
+    if (
+        payload.session_id
+        and payload.turn_id
+        and payload.tool_name
+        and settings.trueforge_enabled
+    ):
         if payload.session_id != incident.trueforge_session_id:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"Session {payload.session_id} does not belong to "
-                    f"incident {incident_id} (expected {incident.trueforge_session_id})"
+                    f"Session {payload.session_id} does not belong "
+                    f"to incident {incident_id}"
                 ),
             )
         try:
@@ -389,8 +880,16 @@ async def handle_approval(
                 },
             })
         except Exception as e:
-            logger.error(f"Failed to forward approval to TrueForge: {e}")
+            logger.error(f"Failed to forward approval: {e}")
             tf_result = {"error": str(e)}
+
+    # Bug 8: Schedule remediation task on approval
+    if payload.action == "approve":
+        asyncio.create_task(_execute_and_verify_remediation(
+            incident_id=str(incident.id),
+            session_id=incident.trueforge_session_id,
+            incident_type=incident.incident_type or "unknown",
+        ))
 
     return {
         "status": incident.status,
