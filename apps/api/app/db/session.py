@@ -32,6 +32,14 @@ async def ensure_schema():
             logger.info("Schema migration: ensured verification_result column")
         except Exception as e:
             logger.warning(f"Schema migration skipped: {e}")
+        try:
+            await conn.execute(text(
+                "ALTER TABLE incident_events "
+                "ALTER COLUMN metadata TYPE JSONB USING metadata::JSONB"
+            ))
+            logger.info("Schema migration: ensured metadata column is JSONB")
+        except Exception as e:
+            logger.warning(f"Schema migration skipped: {e}")
 
 
 async def get_db():  # type: ignore[no-untyped-def]
