@@ -20,6 +20,7 @@ class Incident(Base):
     status = Column(String(30), nullable=False, default="created")
     incident_type = Column(String(50))
     trueforge_session_id = Column(String(100))
+    verification_result = Column(Text)  # Gap 10: JSON verification result
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     resolved_at = Column(DateTime(timezone=True))
 

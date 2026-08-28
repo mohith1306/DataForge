@@ -24,6 +24,14 @@ async def ensure_schema():
             logger.info("Schema migration: ensured trueforge_session_id column")
         except Exception as e:
             logger.warning(f"Schema migration skipped: {e}")
+        try:
+            await conn.execute(text(
+                "ALTER TABLE incidents "
+                "ADD COLUMN IF NOT EXISTS verification_result TEXT"
+            ))
+            logger.info("Schema migration: ensured verification_result column")
+        except Exception as e:
+            logger.warning(f"Schema migration skipped: {e}")
 
 
 async def get_db():  # type: ignore[no-untyped-def]

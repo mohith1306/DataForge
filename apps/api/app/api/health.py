@@ -11,7 +11,11 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 async def health() -> dict:
-    result: dict = {"status": "healthy", "service": "dataforge-api"}
+    result: dict = {
+        "status": "healthy",
+        "service": "dataforge-api",
+        "environment": settings.dataforge_env,
+    }
 
     if settings.trueforge_enabled:
         try:
