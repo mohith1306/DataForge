@@ -11,12 +11,11 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +30,11 @@ AIRFLOW_PASSWORD = os.getenv("AIRFLOW_PASSWORD", "airflow")
 
 GITHUB_API = "https://api.github.com"
 REPO = os.getenv("GITHUB_REPO", "mohith1306/DataForge")
+
+# Bug 7 fix: require auth token for write tools
+MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN", "")
+
+WRITE_TOOLS = {"rerun_pipeline", "rollback_deployment", "create_incident_ticket"}
 
 IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
@@ -235,9 +239,11 @@ async def execute_tool(name: str, args: dict) -> Any:
         pid = args.get("pipeline_id")
         if pid:
             sql = (
-                f"SELECT pipeline_id, pipeline_name, status, started_at, completed_at, "
-                f"error_message, rows_processed FROM {CLICKHOUSE_DB}.pipeline_events "
-                f"WHERE pipeline_id = '{_validate_identifier(pid)}' ORDER BY started_at DESC LIMIT 1"
+                f"SELECT pipeline_id, pipeline_name, status, "
+                f"started_at, completed_at, error_message, "
+                f"rows_processed FROM {CLICKHOUSE_DB}.pipeline_events "
+                f"WHERE pipeline_id = '{_validate_identifier(pid)}' "
+                f"ORDER BY started_at DESC LIMIT 1"
             )
         else:
             sql = (
@@ -245,7 +251,8 @@ async def execute_tool(name: str, args: dict) -> Any:
                 f"argMax(status, started_at) as status, "
                 f"argMax(started_at, started_at) as started_at, "
                 f"argMax(error_message, started_at) as error_message "
-                f"FROM {CLICKHOUSE_DB}.pipeline_events GROUP BY pipeline_id ORDER BY started_at DESC"
+                f"FROM {CLICKHOUSE_DB}.pipeline_events "
+                f"GROUP BY pipeline_id ORDER BY started_at DESC"
             )
         rows = await _query(sql)
         return {"pipelines": rows, "count": len(rows)}
@@ -348,10 +355,26 @@ async def execute_tool(name: str, args: dict) -> Any:
                     auth=(AIRFLOW_USERNAME, AIRFLOW_PASSWORD),
                 )
                 if resp.status_code in (200, 201):
-                    return {"status": "success", "pipeline_id": pid, "message": "Triggered via Airflow"}
-        except Exception:
-            pass
-        return {"status": "success", "pipeline_id": pid, "message": "Simulated rerun"}
+                    data = resp.json()
+                    return {
+                        "status": "success",
+                        "pipeline_id": pid,
+                        "message": "Triggered via Airflow",
+                        "dag_run_id": data.get("dag_run_id"),
+                    }
+                # Bug 8 fix: return actual failure status
+                return {
+                    "status": "failed",
+                    "pipeline_id": pid,
+                    "message": f"Airflow returned {resp.status_code}: {resp.text[:500]}",
+                }
+        except Exception as e:
+            # Bug 8 fix: return actual error
+            return {
+                "status": "failed",
+                "pipeline_id": pid,
+                "message": f"Airflow request failed: {e}",
+            }
 
     elif name == "rollback_deployment":
         did = args.get("deployment_id", "v2.8.0")
@@ -368,7 +391,11 @@ async def execute_tool(name: str, args: dict) -> Any:
                 nulls = rows[0].get("nulls", 0)
                 total = rows[0].get("total", 1)
                 null_rate = nulls / total if total > 0 else 0
-                checks.append({"check": "null_rate", "value": round(null_rate, 4), "passed": null_rate < 0.05})
+                checks.append({
+                    "check": "null_rate",
+                    "value": round(null_rate, 4),
+                    "passed": null_rate < 0.05,
+                })
         except Exception as e:
             checks.append({"check": "null_rate", "error": str(e), "passed": False})
         passed = sum(1 for c in checks if c.get("passed"))
@@ -402,7 +429,7 @@ async def sse_endpoint(request: Request):
                 try:
                     msg = await asyncio.wait_for(queue.get(), timeout=30)
                     yield f"event: message\ndata: {json.dumps(msg)}\n\n"
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": keepalive\n\n"
         finally:
             # Mark SSE disconnected but keep session for POST responses
@@ -454,6 +481,24 @@ async def messages_endpoint(request: Request):
     elif method == "tools/call":
         tool_name = body.get("params", {}).get("name")
         tool_args = body.get("params", {}).get("arguments", {})
+
+        # Bug 7 fix: require auth token for write tools
+        if tool_name in WRITE_TOOLS and MCP_AUTH_TOKEN:
+            auth_header = body.get("params", {}).get("metadata", {}).get("authorization", "")
+            if auth_header != f"Bearer {MCP_AUTH_TOKEN}":
+                await queue.put({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -1,
+                        "message": (
+                            f"Unauthorized: tool '{tool_name}' requires "
+                            f"Bearer token in metadata.authorization"
+                        ),
+                    },
+                })
+                return Response(status_code=202)
+
         try:
             result = await execute_tool(tool_name, tool_args)
             await queue.put({

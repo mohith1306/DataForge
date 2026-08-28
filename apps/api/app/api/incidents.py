@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.app.api.stream import publish_event
 from apps.api.app.core.config import settings
 from apps.api.app.db.models import Incident, IncidentEvent
-from apps.api.app.db.session import get_db
+from apps.api.app.db.session import async_session_factory, get_db
 from apps.api.app.schemas.incident import (
     ApprovalRequest,
     IncidentCreate,
@@ -140,11 +140,11 @@ async def start_investigation(incident_id: str, db: AsyncSession = Depends(get_d
         return {"status": "started", "incident_id": str(incident_id), "trueforge": False}
 
     # Fire-and-forget: start TrueForge investigation in background
+    # Bug 2 fix: do NOT pass request-scoped db — task creates its own session
     asyncio.create_task(_run_trueforge_investigation(
         incident_id=str(incident.id),
         incident_type=incident.incident_type or "unknown",
         description=f"{incident.title}\n\n{incident.description or ''}",
-        db=db,
     ))
 
     return {"status": "started", "incident_id": str(incident_id), "trueforge": True}
@@ -154,9 +154,11 @@ async def _run_trueforge_investigation(
     incident_id: str,
     incident_type: str,
     description: str,
-    db: AsyncSession,
 ) -> None:
-    """Background task: create TrueForge session and stream investigation events."""
+    """Background task: create TrueForge session and stream investigation events.
+
+    Creates its own DB session to avoid reusing the request-scoped session.
+    """
     tf = _get_trueforge()
 
     try:
@@ -181,21 +183,24 @@ async def _run_trueforge_investigation(
             })
             return
 
-        # Store session_id on the incident
-        async with db.begin():
-            res = await db.execute(select(Incident).where(Incident.id == incident_id))
-            inc = res.scalar_one_or_none()
-            if inc:
-                inc.trueforge_session_id = session_id
+        # Bug 2 fix: create a dedicated session for background DB writes
+        async with async_session_factory() as db:
+            async with db.begin():
+                res = await db.execute(select(Incident).where(Incident.id == incident_id))
+                inc = res.scalar_one_or_none()
+                if inc:
+                    inc.trueforge_session_id = session_id
 
         await publish_event(incident_id, {
             "type": "investigation.session_created",
             "data": {"session_id": session_id, "message": "TrueForge session created"},
         })
 
-        # Stream investigation events from TrueForge
+        # Bug 3 fix: stream the SAME turn we created (not a new one)
+        # start_investigation already created a turn; stream events for it
         tool_count = 0
-        async for event in tf.stream_investigation(session_id):
+        turn_id = session_result.get("turn_id")
+        async for event in tf.stream_turn_events(session_id, turn_id):
             event_type = event.get("type", "")
 
             if event_type == "model.message":
@@ -218,6 +223,7 @@ async def _run_trueforge_investigation(
                 status = event.get("state", {}).get("status", "unknown")
                 if status == "error":
                     error_msg = event.get("state", {}).get("message", "Unknown error")
+                    await _set_incident_status(incident_id, "failed")
                     await publish_event(incident_id, {
                         "type": "investigation.error",
                         "data": {"message": error_msg, "session_id": session_id},
@@ -225,6 +231,7 @@ async def _run_trueforge_investigation(
                 else:
                     output = event.get("state", {}).get("output", {})
                     content = output.get("content", "") if isinstance(output, dict) else ""
+                    await _set_incident_status(incident_id, "investigation_complete")
                     await publish_event(incident_id, {
                         "type": "investigation.completed",
                         "data": {
@@ -233,12 +240,6 @@ async def _run_trueforge_investigation(
                             "summary": content[:2000] if content else "",
                         },
                     })
-                    # Update incident status
-                    async with db.begin():
-                        res = await db.execute(select(Incident).where(Incident.id == incident_id))
-                        inc = res.scalar_one_or_none()
-                        if inc:
-                            inc.status = "investigation_complete"
 
             elif event_type == "mcp.initialize":
                 servers = event.get("mcp_servers", [])
@@ -248,16 +249,36 @@ async def _run_trueforge_investigation(
                     "data": {"servers": server_names, "session_id": session_id},
                 })
 
-            # Forward reasoning and other deltas as agent activity
-            elif "delta" in event_type or "reasoning" in str(event.get("reasoning_content", "")):
-                pass  # Skip verbose streaming deltas
+            # Bug 5 fix: handle synthetic error events from stream failures
+            elif event_type == "error":
+                error_msg = event.get("message", "Stream connection lost")
+                await _set_incident_status(incident_id, "failed")
+                await publish_event(incident_id, {
+                    "type": "investigation.error",
+                    "data": {"message": error_msg, "session_id": session_id},
+                })
+                return
 
     except Exception as e:
         logger.error(f"TrueForge investigation failed: {e}", exc_info=True)
+        await _set_incident_status(incident_id, "failed")
         await publish_event(incident_id, {
             "type": "investigation.error",
             "data": {"message": str(e)},
         })
+
+
+async def _set_incident_status(incident_id: str, status: str) -> None:
+    """Update incident status using a dedicated DB session."""
+    try:
+        async with async_session_factory() as db:
+            async with db.begin():
+                res = await db.execute(select(Incident).where(Incident.id == incident_id))
+                inc = res.scalar_one_or_none()
+                if inc:
+                    inc.status = status
+    except Exception as e:
+        logger.error(f"Failed to update incident {incident_id} status: {e}")
 
 
 @router.post("/{incident_id}/remediate")
@@ -339,9 +360,17 @@ async def handle_approval(
         "data": _incident_to_dict(incident),
     })
 
-    # Forward to TrueForge if session/turn IDs provided
+    # Bug 4 fix: validate session belongs to this incident
     tf_result = None
     if payload.session_id and payload.turn_id and payload.tool_name and settings.trueforge_enabled:
+        if payload.session_id != incident.trueforge_session_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Session {payload.session_id} does not belong to "
+                    f"incident {incident_id} (expected {incident.trueforge_session_id})"
+                ),
+            )
         try:
             tf = _get_trueforge()
             tf_result = await tf.approve_action(

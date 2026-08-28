@@ -52,24 +52,83 @@ async def trueforge_investigate(state: dict) -> dict:
         )
 
         if result.get("status") == "error":
-            logger.warning(f"TrueForge investigation failed, falling back: {result.get('error')}")
+            logger.warning(
+                f"TrueForge investigation failed, falling back: {result.get('error')}"
+            )
             from agent.graph.nodes.investigate import investigate
             return await investigate(state)
 
+        session_id = result.get("session_id")
+        turn_id = result.get("turn_id")
+
+        # Bug 6 fix: wait for investigation result and translate into evidence
+        evidence = list(state.get("evidence", []))
+        events = list(state.get("events", []))
+
+        events.append({
+            "type": "trueforge.started",
+            "agent": "trueforge",
+            "message": f"TrueForge investigation started: session {session_id}",
+        })
+
+        # Collect events from the investigation
+        tool_count = 0
+        findings: list[dict] = []
+        try:
+            async for event in runtime.stream_turn_events(session_id, turn_id):
+                event_type = event.get("type", "")
+                if event_type == "tool.response":
+                    tool_count += 1
+                    tool_name = event.get("tool_name", "unknown")
+                    # Convert tool results into evidence
+                    tool_result = event.get("result", {})
+                    if isinstance(tool_result, dict) and not tool_result.get("error"):
+                        findings.append({
+                            "source": "trueforge",
+                            "type": "finding",
+                            "summary": f"Tool {tool_name} returned data",
+                            "data": tool_result,
+                            "confidence": 0.7,
+                        })
+                elif event_type == "model.message":
+                    content = event.get("content", "")
+                    if content:
+                        findings.append({
+                            "source": "trueforge",
+                            "type": "analysis",
+                            "summary": content[:500],
+                            "data": {"raw": content},
+                            "confidence": 0.6,
+                        })
+        except Exception as e:
+            logger.warning(f"Error streaming TrueForge events: {e}")
+
+        # Convert findings into evidence format
+        for finding in findings:
+            evidence.append({
+                "source": finding.get("source", "trueforge"),
+                "type": finding.get("type", "finding"),
+                "summary": finding.get("summary", ""),
+                "data": finding.get("data", {}),
+                "confidence": finding.get("confidence", 0.5),
+                "is_hypothesis": finding.get("type") == "analysis",
+            })
+
+        events.append({
+            "type": "trueforge.completed",
+            "agent": "trueforge",
+            "message": (
+                f"TrueForge investigation completed: "
+                f"{len(evidence)} evidence items, {tool_count} tools called"
+            ),
+        })
+
         return {
             "status": "investigating",
-            "trueforge_session_id": result.get("session_id"),
-            "trueforge_turn_id": result.get("turn_id"),
-            "events": state.get("events", []) + [
-                {
-                    "type": "trueforge.started",
-                    "agent": "trueforge",
-                    "message": (
-                        f"TrueForge investigation started: "
-                        f"session {result.get('session_id')}"
-                    ),
-                }
-            ],
+            "evidence": evidence,
+            "events": events,
+            "trueforge_session_id": session_id,
+            "trueforge_turn_id": turn_id,
         }
 
     except Exception as e:

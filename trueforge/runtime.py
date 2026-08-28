@@ -132,6 +132,33 @@ class TrueForgeRuntime:
             logger.error(f"Stream error: {e}")
             yield {"type": "error", "message": str(e)}
 
+    async def stream_turn_events(
+        self,
+        session_id: str,
+        turn_id: str | None,
+    ):
+        """Stream events for an existing turn (Bug 3 fix).
+
+        If turn_id is provided, reads events for that specific turn.
+        Otherwise falls back to creating a new streaming turn.
+        """
+        if not turn_id:
+            # Fallback: create a new streaming turn
+            async for event in self.client.create_turn_stream(
+                session_id=session_id,
+                message="Continue the investigation.",
+            ):
+                yield event
+            return
+
+        try:
+            events = await self.client.get_turn_events(session_id, turn_id)
+            for event in events:
+                yield event
+        except TrueForgeError as e:
+            logger.error(f"Failed to get turn events: {e}")
+            yield {"type": "error", "message": str(e)}
+
     async def get_investigation_result(self, session_id: str) -> dict:
         """Get the final result of an investigation."""
         try:

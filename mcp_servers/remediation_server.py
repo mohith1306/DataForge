@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import re
-import uuid
 
 import httpx
 from fastmcp import FastMCP
@@ -127,13 +126,17 @@ async def create_incident_ticket(title: str, description: str) -> dict:
 
     This is a write action that requires approval.
     """
-    ticket_id = f"DF-{uuid.uuid4().hex[:8].upper()}"
+    # Bug 10 fix: return unsupported instead of fabricating a ticket
+    # A generated identifier alone does not create a durable ticket
     return {
         "tool": "create_incident_ticket",
-        "status": "success",
-        "ticket_id": ticket_id,
+        "status": "unsupported",
         "title": title,
-        "message": f"Ticket {ticket_id} created",
+        "message": (
+            "Ticket creation requires integration with an incident tracking system "
+            "(e.g., PagerDuty, Jira, Linear). No ticket was created. "
+            "Configure TICKETING_API_URL and TICKETING_API_KEY to enable."
+        ),
     }
 
 
