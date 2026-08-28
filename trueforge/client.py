@@ -247,7 +247,7 @@ class TrueForgeClient:
         """Check TrueForge server health."""
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
-                f"{self.base_url}/api/v1/health",
+                f"{self.base_url}/api/v1/capabilities",
                 headers=self._headers(),
             )
             if resp.status_code != 200:
