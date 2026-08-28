@@ -22,7 +22,7 @@ async def health() -> dict:
             from trueforge.client import TrueForgeClient
             client = TrueForgeClient(base_url=settings.trueforge_url)
             tf_health = await client.health()
-            result["trueforge"] = {"status": "connected", **tf_health}
+            result["trueforge"] = {"status": "connected", "capabilities": tf_health.get("data", {})}
         except Exception as e:
             result["trueforge"] = {"status": "disconnected", "error": str(e)}
             logger.warning(f"TrueForge health check failed: {e}")
