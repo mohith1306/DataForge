@@ -2,7 +2,7 @@
 import uuid
 
 from sqlalchemy import Column, DateTime, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -34,5 +34,5 @@ class IncidentEvent(Base):
     agent = Column(String(50))
     tool = Column(String(100))
     message = Column(Text)
-    metadata_ = Column("metadata", Text)
+    metadata_ = Column("metadata", JSONB, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
