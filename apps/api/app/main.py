@@ -15,6 +15,8 @@ from apps.api.app.core.logging import setup_logging
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     setup_logging()
+    from apps.api.app.db.session import ensure_schema
+    await ensure_schema()
     yield
 
 

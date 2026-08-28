@@ -19,6 +19,7 @@ class Incident(Base):
     severity = Column(String(20), nullable=False, default="medium")
     status = Column(String(30), nullable=False, default="created")
     incident_type = Column(String(50))
+    trueforge_session_id = Column(String(100))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     resolved_at = Column(DateTime(timezone=True))
 
