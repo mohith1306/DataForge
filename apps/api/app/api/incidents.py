@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -481,161 +480,297 @@ async def _verify_incident_resolution(
     incident_id: str,
     incident_type: str,
 ) -> dict:
-    """Bug 4+5: Verify with incident-scoped checks.
+    """Verify incident resolution with evidence-based checks.
 
-    Opens a real MCP SSE session (Bug 1) and waits for the
-    actual response (Bug 2).
+    Uses a raw socket SSE client to open an MCP session, send tool
+    requests, and read actual JSON-RPC responses from the SSE stream.
+    This avoids the httpx blocking issue where POST with keep-alive
+    would hang waiting for a response body that never arrives.
     """
     checks = []
     all_passed = True
+    reader = None
+    writer = None
 
-    # Bug 4: Query actual pipeline status, not just TrueForge health
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            # Open SSE session
-            sse_resp = await client.get(
-                "http://localhost:8791/sse",
-                timeout=5,
+        import asyncio
+        import json as _json
+
+        # Open raw TCP connection to MCP server
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", 8791
+        )
+
+        # Send GET /sse
+        writer.write(
+            b"GET /sse HTTP/1.1\r\n"
+            b"Host: localhost:8791\r\n"
+            b"Accept: text/event-stream\r\n"
+            b"Connection: keep-alive\r\n"
+            b"\r\n"
+        )
+        await writer.drain()
+
+        # Read HTTP response headers
+        header_data = b""
+        while True:
+            chunk = await asyncio.wait_for(
+                reader.read(1024), timeout=10
             )
-            # Parse endpoint from SSE
-            endpoint_line = ""
-            for line in sse_resp.text.split("\n"):
-                if line.startswith("data: /messages"):
-                    endpoint_line = line.split("data: ")[1]
+            if not chunk:
+                raise ConnectionError("SSE connection closed")
+            header_data += chunk
+            if b"\r\n\r\n" in header_data:
+                break
+
+        # Parse SSE endpoint from first event
+        event_type = ""
+        event_data = ""
+        endpoint_line = ""
+
+        while True:
+            line_raw = await asyncio.wait_for(
+                reader.readline(), timeout=10
+            )
+            line = line_raw.decode().strip()
+            if line.startswith("event:"):
+                event_type = line[6:].strip()
+            elif line.startswith("data:"):
+                event_data = line[5:].strip()
+            elif line == "" and event_type and event_data:
+                if (
+                    event_type == "endpoint"
+                    and event_data.startswith("/messages")
+                ):
+                    endpoint_line = event_data
+                    break
+                event_type = ""
+                event_data = ""
+
+        if not endpoint_line:
+            checks.append({
+                "check": "mcp_session",
+                "passed": False,
+                "message": "No endpoint received from MCP SSE",
+            })
+            all_passed = False
+            return {
+                "resolved": False,
+                "checks": checks,
+                "passed_count": 0,
+                "total_count": 1,
+            }
+
+        # Helper: send POST and read next SSE response
+        async def _post_and_read(
+            payload: dict,
+        ) -> dict | None:
+            body = _json.dumps(payload)
+            request = (
+                f"POST {endpoint_line} HTTP/1.1\r\n"
+                f"Host: localhost:8791\r\n"
+                f"Content-Type: application/json\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                f"Connection: keep-alive\r\n"
+                f"\r\n"
+                f"{body}"
+            )
+            writer.write(request.encode())
+            await writer.drain()
+
+            # Read HTTP response status line
+            status_line = (
+                await asyncio.wait_for(reader.readline(), timeout=10)
+            ).decode().strip()
+            status_code = int(status_line.split(" ")[1])
+
+            # Read response headers until blank line
+            while True:
+                header = (
+                    await asyncio.wait_for(reader.readline(), timeout=10)
+                ).decode().strip()
+                if header == "":
                     break
 
-            if endpoint_line:
-                # Initialize session
-                await client.post(
-                    f"http://localhost:8791{endpoint_line}",
-                    json={
-                        "jsonrpc": "2.0",
-                        "id": "init",
-                        "method": "initialize",
-                        "params": {
-                            "protocolVersion": "2024-11-05",
-                            "capabilities": {},
-                            "clientInfo": {"name": "verifier"},
-                        },
-                    },
+            # Read SSE events for the response
+            if status_code != 202:
+                return None
+
+            event_type = ""
+            event_data = ""
+            while True:
+                line_raw = await asyncio.wait_for(
+                    reader.readline(), timeout=15
                 )
+                line = line_raw.decode().strip()
+                if line.startswith("event:"):
+                    event_type = line[6:].strip()
+                elif line.startswith("data:"):
+                    event_data = line[5:].strip()
+                elif line == "" and event_type == "message":
+                    try:
+                        return _json.loads(event_data)
+                    except Exception:
+                        pass
+                    event_type = ""
+                    event_data = ""
+            return None
 
-                # Bug 5: Query pipeline status scoped to incident type
-                if incident_type in (
-                    "pipeline_failure", "volume_drop"
-                ):
-                    pipe_resp = await client.post(
-                        f"http://localhost:8791{endpoint_line}",
-                        json={
-                            "jsonrpc": "2.0",
-                            "id": "pipe-check",
-                            "method": "tools/call",
-                            "params": {
-                                "name": "get_pipeline_status",
-                                "arguments": {},
-                            },
-                        },
-                    )
-                    if pipe_resp.status_code == 202:
-                        checks.append({
-                            "check": "pipeline_status",
-                            "passed": True,
-                            "message": (
-                                "Pipeline status check initiated"
-                            ),
-                        })
-                    else:
-                        checks.append({
-                            "check": "pipeline_status",
-                            "passed": False,
-                            "message": (
-                                f"Pipeline check failed: "
-                                f"{pipe_resp.status_code}"
-                            ),
-                        })
-                        all_passed = False
+        # Send initialize
+        init_result = await _post_and_read({
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "verifier"},
+            },
+        })
 
-                # Bug 5: Data quality check scoped to incident
-                if incident_type in (
-                    "null_injection", "schema_drift",
-                    "volume_drop", "distribution_shift",
-                ):
-                    dq_resp = await client.post(
-                        f"http://localhost:8791{endpoint_line}",
-                        json={
-                            "jsonrpc": "2.0",
-                            "id": "dq-check",
-                            "method": "tools/call",
-                            "params": {
-                                "name": "validate_data_quality",
-                                "arguments": {},
-                            },
-                        },
-                    )
-                    # Bug 2: 202 means accepted, not passed
-                    if dq_resp.status_code == 202:
-                        checks.append({
-                            "check": "data_quality_validation",
-                            "passed": True,
-                            "message": (
-                                "DQ validation initiated"
-                            ),
-                        })
-                    else:
-                        checks.append({
-                            "check": "data_quality_validation",
-                            "passed": False,
-                            "message": (
-                                f"DQ check failed: "
-                                f"{dq_resp.status_code}"
-                            ),
-                        })
-                        all_passed = False
+        if not init_result or "result" not in init_result:
+            checks.append({
+                "check": "mcp_init",
+                "passed": False,
+                "message": "MCP initialize failed",
+            })
+            all_passed = False
+            return {
+                "resolved": False,
+                "checks": checks,
+                "passed_count": 0,
+                "total_count": 1,
+            }
 
-                # Freshness check for freshness_lag incidents
-                if incident_type == "freshness_lag":
-                    fresh_resp = await client.post(
-                        f"http://localhost:8791{endpoint_line}",
-                        json={
-                            "jsonrpc": "2.0",
-                            "id": "fresh-check",
-                            "method": "tools/call",
-                            "params": {
-                                "name": "execute_select",
-                                "arguments": {
-                                    "query": (
-                                        "SELECT max(started_at) "
-                                        "as latest "
-                                        "FROM dataforge."
-                                        "pipeline_events"
-                                    ),
-                                },
-                            },
-                        },
-                    )
-                    if fresh_resp.status_code == 202:
-                        checks.append({
-                            "check": "freshness_check",
-                            "passed": True,
-                            "message": (
-                                "Freshness check initiated"
-                            ),
-                        })
-                    else:
-                        checks.append({
-                            "check": "freshness_check",
-                            "passed": False,
-                            "message": (
-                                f"Freshness check failed: "
-                                f"{fresh_resp.status_code}"
-                            ),
-                        })
-                        all_passed = False
+        # Bug 6: Query actual pipeline status for relevant incidents
+        if incident_type in ("pipeline_failure", "volume_drop"):
+            pipe_result = await _post_and_read({
+                "jsonrpc": "2.0",
+                "id": "pipe-check",
+                "method": "tools/call",
+                "params": {
+                    "name": "get_pipeline_status",
+                    "arguments": {},
+                },
+            })
+
+            if pipe_result:
+                content = (
+                    pipe_result.get("result", {})
+                    .get("content", [{}])
+                )
+                text = (
+                    content[0].get("text", "")
+                    if isinstance(content, list) and content
+                    else ""
+                )
+                pipeline_ok = (
+                    "success" in text.lower()
+                    or "healthy" in text.lower()
+                )
+                checks.append({
+                    "check": "pipeline_status",
+                    "passed": pipeline_ok,
+                    "message": f"Pipeline: {text[:500]}",
+                })
+                if not pipeline_ok:
+                    all_passed = False
             else:
                 checks.append({
-                    "check": "mcp_session",
+                    "check": "pipeline_status",
                     "passed": False,
-                    "message": "Could not open MCP SSE session",
+                    "message": "No pipeline status response",
+                })
+                all_passed = False
+
+        # Bug 1+5: Data quality check — read actual SSE response
+        if incident_type in (
+            "null_injection", "schema_drift",
+            "volume_drop", "distribution_shift",
+        ):
+            dq_result = await _post_and_read({
+                "jsonrpc": "2.0",
+                "id": "dq-check",
+                "method": "tools/call",
+                "params": {
+                    "name": "validate_data_quality",
+                    "arguments": {},
+                },
+            })
+
+            if dq_result:
+                content = (
+                    dq_result.get("result", {})
+                    .get("content", [{}])
+                )
+                text = (
+                    content[0].get("text", "")
+                    if isinstance(content, list) and content
+                    else ""
+                )
+                dq_passed = (
+                    "passed" in text.lower()
+                    and "error" not in text.lower()
+                )
+                checks.append({
+                    "check": "data_quality_validation",
+                    "passed": dq_passed,
+                    "message": f"DQ: {text[:500]}",
+                })
+                if not dq_passed:
+                    all_passed = False
+            else:
+                checks.append({
+                    "check": "data_quality_validation",
+                    "passed": False,
+                    "message": "No DQ response received",
+                })
+                all_passed = False
+
+        # Freshness check for freshness_lag incidents
+        if incident_type == "freshness_lag":
+            fresh_result = await _post_and_read({
+                "jsonrpc": "2.0",
+                "id": "fresh-check",
+                "method": "tools/call",
+                "params": {
+                    "name": "execute_select",
+                    "arguments": {
+                        "query": (
+                            "SELECT max(started_at) "
+                            "as latest "
+                            "FROM dataforge.pipeline_events"
+                        ),
+                    },
+                },
+            })
+
+            if fresh_result:
+                content = (
+                    fresh_result.get("result", {})
+                    .get("content", [{}])
+                )
+                text = (
+                    content[0].get("text", "")
+                    if isinstance(content, list) and content
+                    else ""
+                )
+                fresh_passed = (
+                    "latest" in text.lower()
+                    and "error" not in text.lower()
+                )
+                checks.append({
+                    "check": "freshness_check",
+                    "passed": fresh_passed,
+                    "message": f"Freshness: {text[:500]}",
+                })
+                if not fresh_passed:
+                    all_passed = False
+            else:
+                checks.append({
+                    "check": "freshness_check",
+                    "passed": False,
+                    "message": "No freshness response",
                 })
                 all_passed = False
 
@@ -646,6 +781,13 @@ async def _verify_incident_resolution(
             "message": f"Verification error: {e}",
         })
         all_passed = False
+    finally:
+        if writer:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
 
     return {
         "resolved": all_passed and len(checks) > 0,

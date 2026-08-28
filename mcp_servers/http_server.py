@@ -361,59 +361,52 @@ async def execute_tool(name: str, args: dict) -> Any:
     elif name == "get_changed_files":
         pr_number = args["pr_number"]
         url = f"{GITHUB_API}/repos/{REPO}/pulls/{pr_number}/files"
+        all_files = []
+        page = 1
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(url, params={"per_page": 100}, headers=_get_github_headers())
-            if resp.status_code != 200:
-                return {"files": [], "error": resp.text}
-            data = resp.json()
-            files = [
-                {
-                    "filename": f["filename"],
-                    "status": f["status"],
-                    "additions": f["additions"],
-                    "deletions": f["deletions"],
-                    "changes": f["changes"],
-                }
-                for f in data
-            ]
-            return {"files": files, "count": len(files)}
+            while True:
+                resp = await client.get(
+                    url,
+                    params={"per_page": 100, "page": page},
+                    headers=_get_github_headers(),
+                )
+                if resp.status_code != 200:
+                    if page == 1:
+                        return {"files": [], "error": resp.text}
+                    break
+                data = resp.json()
+                if not data:
+                    break
+                for f in data:
+                    all_files.append({
+                        "filename": f["filename"],
+                        "status": f["status"],
+                        "additions": f["additions"],
+                        "deletions": f["deletions"],
+                        "changes": f["changes"],
+                    })
+                if len(data) < 100:
+                    break
+                page += 1
+        return {
+            "files": all_files,
+            "count": len(all_files),
+            "truncated": False,
+        }
 
     elif name == "rerun_pipeline":
         pid = _validate_identifier(args["pipeline_id"])
-        # Gap 9: Demo mode indicator
+        # Gap 9: Demo mode — simulate without real mutation
         if DATAFORGE_ENV == "demo":
-            try:
-                url = f"{AIRFLOW_URL}/api/v1/dags/{pid}/dagRuns"
-                async with httpx.AsyncClient(timeout=30) as client:
-                    resp = await client.post(
-                        url,
-                        json={"conf": {"rerun": True}},
-                        auth=(AIRFLOW_USERNAME, AIRFLOW_PASSWORD),
-                    )
-                    if resp.status_code in (200, 201):
-                        data = resp.json()
-                        return {
-                            "status": "success",
-                            "pipeline_id": pid,
-                            "message": "Triggered via Airflow (DEMO MODE)",
-                            "dag_run_id": data.get("dag_run_id"),
-                            "environment": "demo",
-                        }
-                    return {
-                        "status": "failed",
-                        "pipeline_id": pid,
-                        "message": f"Airflow returned {resp.status_code}: {resp.text[:500]}",
-                        "environment": "demo",
-                    }
-            except Exception as e:
-                return {
-                    "status": "failed",
-                    "pipeline_id": pid,
-                    "message": f"Airflow request failed: {e}",
-                    "environment": "demo",
-                }
+            return {
+                "status": "success",
+                "pipeline_id": pid,
+                "message": "Simulated pipeline rerun (DEMO MODE — no real mutation)",
+                "dag_run_id": f"demo-run-{pid}",
+                "environment": "demo",
+            }
         else:
-            # Production mode
+            # Production mode — actual Airflow call
             try:
                 url = f"{AIRFLOW_URL}/api/v1/dags/{pid}/dagRuns"
                 async with httpx.AsyncClient(timeout=30) as client:
