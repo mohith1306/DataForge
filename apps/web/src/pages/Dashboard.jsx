@@ -29,40 +29,62 @@ export default function Dashboard() {
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
+    console.log('[Dashboard] Mounted');
     loadData();
-    const interval = setInterval(loadData, 10000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      console.log('[Dashboard] Auto-refresh polling');
+      loadData();
+    }, 10000);
+    return () => {
+      console.log('[Dashboard] Unmounted');
+      clearInterval(interval);
+    };
   }, [filter]);
 
   async function loadData() {
     try {
+      console.log('[Dashboard] Loading data, filter:', filter);
       const [statsData, listData] = await Promise.all([
         fetchStats(),
         fetchIncidents(filter !== 'all' ? { status: filter } : {}),
       ]);
       setStats(statsData);
       setIncidents(listData);
+      console.log('[Dashboard] Data loaded:', listData.length, 'incidents');
     } catch (err) {
-      console.error('Failed to load incidents:', err);
+      console.error('[Dashboard] Failed to load data:', err);
     } finally {
       setLoading(false);
     }
   }
 
   async function handleCreateIncident() {
+    console.log('[Dashboard] Creating incident...');
     setCreating(true);
     try {
-      await createIncident({
+      const result = await createIncident({
         title: 'APAC revenue dropped 42%',
         severity: 'critical',
         incident_type: 'volume_drop',
         description: 'APAC region showing 42% revenue drop in last 5 days. Pipeline PL-001 failed.',
       });
+      console.log('[Dashboard] Incident created:', result.id);
       loadData();
     } catch (err) {
-      console.error('Failed to create incident:', err);
+      console.error('[Dashboard] Failed to create incident:', err);
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function handleStartInvestigation(incidentId) {
+    console.log('[Dashboard] Starting investigation for:', incidentId);
+    try {
+      await startInvestigation(incidentId);
+      console.log('[Dashboard] Investigation started, refreshing...');
+      loadData();
+    } catch (err) {
+      console.error('[Dashboard] Failed to start investigation:', err);
     }
   }
 
@@ -96,7 +118,10 @@ export default function Dashboard() {
                 <button
                   key={s}
                   className={`filter-btn ${filter === s ? 'active' : ''}`}
-                  onClick={() => setFilter(s)}
+                  onClick={() => {
+                    console.log('[Dashboard] Filter changed to:', s);
+                    setFilter(s);
+                  }}
                 >
                   {s.charAt(0).toUpperCase() + s.slice(1)}
                 </button>
@@ -119,14 +144,18 @@ export default function Dashboard() {
           <div className="empty-state">
             <p>No incidents found</p>
             <p style={{ color: '#666', fontSize: '0.8rem', marginTop: '0.5rem' }}>
-              Create one from the Chaos Lab or API
+              Click "+ New Incident" to create one
             </p>
           </div>
         ) : (
           <div className="incident-list">
             {incidents.map(inc => (
               <div key={inc.id} className="incident-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Link to={`/incidents/${inc.id}`} style={{ flex: 1, textDecoration: 'none', color: 'inherit' }}>
+                <Link
+                  to={`/incidents/${inc.id}`}
+                  style={{ flex: 1, textDecoration: 'none', color: 'inherit' }}
+                  onClick={() => console.log('[Dashboard] Navigating to incident:', inc.id)}
+                >
                   <div className="incident-main">
                     <span
                       className="severity-dot"
@@ -155,14 +184,9 @@ export default function Dashboard() {
                     <button
                       className="btn btn-primary"
                       style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem' }}
-                      onClick={async (e) => {
+                      onClick={(e) => {
                         e.preventDefault();
-                        try {
-                          await startInvestigation(inc.id);
-                          loadData();
-                        } catch (err) {
-                          console.error('Failed to start investigation:', err);
-                        }
+                        handleStartInvestigation(inc.id);
                       }}
                     >
                       Start
