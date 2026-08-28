@@ -37,9 +37,13 @@ class TrueForgeRuntime:
         except TrueForgeError as e:
             logger.warning(f"Could not list agents: {e}")
 
-        # Create agent
+        # Create agent — TrueForge expects {name, manifest: {model, instructions, ...}}
         try:
-            result = await self.client.create_agent(DATAFORGE_INVESTIGATOR_SPEC)
+            payload = {
+                "name": "dataforge-investigator",
+                "manifest": DATAFORGE_INVESTIGATOR_SPEC,
+            }
+            result = await self.client.create_agent(payload)
             self._agent_id = result.get("id")
             logger.info(f"Created agent: {self._agent_id}")
             return self._agent_id
