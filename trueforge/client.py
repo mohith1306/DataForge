@@ -96,7 +96,6 @@ class TrueForgeClient:
         self,
         agent_name: str | None = None,
         agent_spec: dict | None = None,
-        title: str | None = None,
     ) -> dict:
         """Create a new session with an agent.
 
@@ -104,14 +103,11 @@ class TrueForgeClient:
         """
         payload: dict[str, Any] = {}
         if agent_name:
-            payload["agent"] = {"type": "reference", "name": agent_name}
+            payload["agent"] = {"name": agent_name}
         elif agent_spec:
             payload["agent"] = {"spec": agent_spec}
         else:
             raise TrueForgeError("Either agent_name or agent_spec required")
-
-        if title:
-            payload["title"] = title
 
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -121,7 +117,8 @@ class TrueForgeClient:
             )
             if resp.status_code not in (200, 201):
                 raise TrueForgeError(f"Create session failed: {resp.status_code} {resp.text}")
-            return resp.json()
+            data = resp.json()
+            return data.get("data", data)
 
     async def get_session(self, session_id: str) -> dict:
         """Get session by ID."""
@@ -175,11 +172,12 @@ class TrueForgeClient:
         """Create a turn and stream events via SSE."""
         payload = {
             "input": [{"type": "user.message", "content": message}],
+            "stream": True,
         }
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             async with client.stream(
                 "POST",
-                f"{self.base_url}/api/v1/sessions/{session_id}/turns/stream",
+                f"{self.base_url}/api/v1/sessions/{session_id}/turns",
                 headers=self._headers(),
                 json=payload,
             ) as resp:

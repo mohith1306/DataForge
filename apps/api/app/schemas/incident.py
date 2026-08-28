@@ -51,6 +51,10 @@ class EvidenceResponse(BaseModel):
 
 class ApprovalRequest(BaseModel):
     reviewer: str = Field(..., min_length=1)
+    action: str = Field(default="approve", pattern=r"^(approve|reject)$")
+    tool_name: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
 
 
 class ApprovalResponse(BaseModel):

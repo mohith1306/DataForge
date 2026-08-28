@@ -57,19 +57,44 @@ class TrueForgeRuntime:
         await self.ensure_agent()
 
         message = (
-            f"Investigate this data quality incident.\n\n"
+            f"## Data Quality Incident\n\n"
             f"Incident ID: {incident_id}\n"
             f"Type: {incident_type}\n"
             f"Description: {description}\n\n"
-            f"Use the database, monitoring, and GitHub tools to collect evidence. "
-            f"Then run sandbox analysis to verify your findings. "
-            f"Finally, identify the root cause and generate a remediation plan."
+            f"## Investigation Instructions\n\n"
+            f"Follow the DataOps investigation methodology:\n\n"
+            f"1. **Database Investigation**: Use `list_tables`, "
+            f"`describe_table`, `execute_select`, and `profile_column` "
+            f"to inspect data quality in ClickHouse.\n"
+            f"2. **Pipeline Investigation**: Use `get_pipeline_status`, "
+            f"`get_pipeline_logs`, and `get_failed_jobs` "
+            f"to check pipeline health.\n"
+            f"3. **GitHub Investigation**: Use `get_recent_commits` "
+            f"and `search_commits` "
+            f"to correlate code changes with the incident.\n"
+            f"4. **Evidence Collection**: "
+            f"Collect structured evidence from each investigation source.\n"
+            f"5. **Root Cause Analysis**: "
+            f"Correlate all evidence to identify the root cause "
+            f"with confidence level.\n"
+            f"6. **Remediation Plan**: "
+            f"Generate a remediation plan with risk assessment.\n"
+            f"7. **Verification**: "
+            f"After remediation, verify the fix worked.\n\n"
+            f"**Rules:**\n"
+            f"- Investigation tools are READ-ONLY "
+            f"— never modify data during investigation\n"
+            f"- Use the sandbox for numerical/statistical analysis\n"
+            f"- High-risk actions (rerun_pipeline, rollback_deployment) "
+            f"require human approval\n"
+            f"- Always verify remediation after execution\n"
+            f"- Distinguish evidence (facts) from hypotheses "
+            f"(interpretations)\n"
         )
 
         try:
             session = await self.client.create_session(
                 agent_name="dataforge-investigator",
-                title=f"Investigation: {incident_id}",
             )
             session_id = session["id"]
 

@@ -19,7 +19,8 @@ dependencies = [
     "alembic>=1.13.0",
     "python-dotenv>=1.0.1",
     "langchain-groq>=1.1.3",
-    "fastmcp>=3.4.7",
+    "fastmcp[server]>=3.4.7",
+    "fastmcp-slim[server]>=3.4.7",
 ]
 
 [project.optional-dependencies]

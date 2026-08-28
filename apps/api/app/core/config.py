@@ -12,9 +12,13 @@ class Settings(BaseSettings):
     clickhouse_port: int = 8123
     clickhouse_database: str = "dataforge"
 
+    # TrueForge
+    trueforge_url: str = "http://localhost:8790"
+    trueforge_enabled: bool = True
+
     # LLM
     groq_api_key: str = ""
-    model_name: str = "llama-3.3-70b-versatile"
+    model_name: str = "qwen/qwen3.6-27b"
 
     # GitHub
     github_repo: str = "mohith1306/DataForge"

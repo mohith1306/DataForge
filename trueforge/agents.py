@@ -3,7 +3,7 @@
 # Agent spec for the DataForge investigator
 DATAFORGE_INVESTIGATOR_SPEC = {
     "model": {
-        "name": "groq/llama-3.3-70b-versatile",
+        "name": "groq/openai/gpt-oss-20b",
         "params": {
             "max_tokens": 4096,
             "temperature": 0.1,
