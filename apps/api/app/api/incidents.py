@@ -28,7 +28,10 @@ _trueforge: TrueForgeRuntime | None = None
 def _get_trueforge() -> TrueForgeRuntime:
     global _trueforge
     if _trueforge is None:
-        _trueforge = TrueForgeRuntime(base_url=settings.trueforge_url)
+        _trueforge = TrueForgeRuntime(
+            base_url=settings.trueforge_url,
+            model_name=settings.model_name,
+        )
     return _trueforge
 
 
@@ -203,6 +206,8 @@ async def _run_trueforge_investigation(
             })
             return
 
+        turn_id = session_result.get("turn_id")
+
         async with async_session_factory() as db:
             async with db.begin():
                 res = await db.execute(
@@ -214,84 +219,147 @@ async def _run_trueforge_investigation(
 
         await publish_event(incident_id, {
             "type": "investigation.session_created",
-            "data": {"session_id": session_id},
+            "data": {"session_id": session_id, "turn_id": turn_id},
         })
 
+        # Poll for events until turn completes
+        seen_events: set[str] = set()
         tool_count = 0
-        turn_id = session_result.get("turn_id")
-        async for event in tf.stream_turn_events(
-            session_id, turn_id
-        ):
-            event_type = event.get("type", "")
+        poll_interval = 3.0
+        retry_count = 0
 
-            if event_type == "model.message":
-                content = event.get("content", "")
-                if content:
+        for _ in range(120):
+            await asyncio.sleep(poll_interval)
+
+            try:
+                events = await tf.client.get_turn_events(session_id, turn_id)
+            except Exception:
+                continue
+
+            for event in events:
+                event_id = event.get("id", event.get("type", str(event)))
+                if event_id in seen_events:
+                    continue
+                seen_events.add(event_id)
+
+                event_type = event.get("type", "")
+
+                if event_type == "model.message":
+                    content = event.get("content", "")
+                    if content:
+                        await publish_event(incident_id, {
+                            "type": "agent.message",
+                            "data": {"content": content, "session_id": session_id},
+                        })
+
+                elif event_type == "tool.response":
+                    tool_name = event.get("tool_name", "unknown")
+                    tool_count += 1
                     await publish_event(incident_id, {
-                        "type": "agent.message",
-                        "data": {
-                            "content": content,
-                            "session_id": session_id,
-                        },
+                        "type": "tool.completed",
+                        "data": {"tool": tool_name, "count": tool_count},
                     })
 
-            elif event_type == "tool.response":
-                tool_name = event.get("tool_name", "unknown")
-                tool_count += 1
-                await publish_event(incident_id, {
-                    "type": "tool.completed",
-                    "data": {
-                        "tool": tool_name,
-                        "count": tool_count,
-                    },
-                })
-
-            elif event_type == "turn.done":
-                status = event.get("state", {}).get("status", "unknown")
-                if status == "error":
-                    error_msg = event.get("state", {}).get(
-                        "message", "Unknown error"
-                    )
-                    await _set_incident_status(incident_id, "failed")
+                elif event_type == "mcp.initialize":
+                    servers = event.get("mcp_servers", [])
+                    names = [s.get("name", "") for s in servers]
                     await publish_event(incident_id, {
-                        "type": "investigation.error",
-                        "data": {"message": error_msg},
-                    })
-                else:
-                    output = event.get("state", {}).get("output", {})
-                    content = (
-                        output.get("content", "")
-                        if isinstance(output, dict)
-                        else ""
-                    )
-                    await _set_incident_status(
-                        incident_id, "investigation_complete"
-                    )
-                    await publish_event(incident_id, {
-                        "type": "investigation.completed",
-                        "data": {
-                            "session_id": session_id,
-                            "tools_called": tool_count,
-                            "summary": content[:2000] if content else "",
-                        },
+                        "type": "mcp.connected",
+                        "data": {"servers": names},
                     })
 
-            elif event_type == "mcp.initialize":
-                servers = event.get("mcp_servers", [])
-                names = [s.get("name", "") for s in servers]
-                await publish_event(incident_id, {
-                    "type": "mcp.connected",
-                    "data": {"servers": names},
-                })
+            try:
+                turn_info = await tf.client.get_turn(session_id, turn_id)
+                turn_data = turn_info.get("data", turn_info)
+                turn_status = turn_data.get("state", {}).get("status", "")
+                if turn_status in ("completed", "done", "error", "cancelled"):
+                    if turn_status in ("error", "cancelled"):
+                        error_msg = turn_data.get("state", {}).get("message", "Unknown error")
+                        # Handle rate limits (429) — wait and retry
+                        if "429" in error_msg or "rate" in error_msg.lower():
+                            retry_count = retry_count + 1 if 'retry_count' in dir() else 1
+                            if retry_count <= 3:
+                                wait_sec = 90 * retry_count
+                                await publish_event(incident_id, {
+                                    "type": "investigation.retry",
+                                    "data": {"message": f"Rate limited (retry {retry_count}/3), waiting {wait_sec}s..."},
+                                })
+                                await asyncio.sleep(wait_sec)
+                                try:
+                                    await tf.client.create_turn(
+                                        session_id=session_id,
+                                        message="Continue the investigation.",
+                                    )
+                                    poll_interval = 2.0
+                                    continue
+                                except Exception:
+                                    pass
+                        # Handle context overflow — summarize and continue
+                        elif any(kw in error_msg.lower() for kw in
+                                 ("context_length", "token", "too long", "max_tokens")):
+                            retry_count = retry_count + 1 if 'retry_count' in dir() else 1
+                            if retry_count <= 2:
+                                await publish_event(incident_id, {
+                                    "type": "investigation.retry",
+                                    "data": {"message": "Context too large, waiting 30s and retrying..."},
+                                })
+                                await asyncio.sleep(30)
+                                try:
+                                    await tf.client.create_turn(
+                                        session_id=session_id,
+                                        message="Context overflow detected. Please summarize your findings so far and continue with a focused investigation.",
+                                    )
+                                    poll_interval = 2.0
+                                    continue
+                                except Exception:
+                                    pass
+                        # Handle stream abort — retry once
+                        elif "abort" in error_msg.lower() or "stream" in error_msg.lower():
+                            retry_count = retry_count + 1 if 'retry_count' in dir() else 1
+                            if retry_count <= 2:
+                                await publish_event(incident_id, {
+                                    "type": "investigation.retry",
+                                    "data": {"message": "Stream interrupted, retrying..."},
+                                })
+                                await asyncio.sleep(10)
+                                try:
+                                    await tf.client.create_turn(
+                                        session_id=session_id,
+                                        message="Continue the investigation.",
+                                    )
+                                    poll_interval = 2.0
+                                    continue
+                                except Exception:
+                                    pass
+                        await _set_incident_status(incident_id, "failed")
+                        await publish_event(incident_id, {
+                            "type": "investigation.error",
+                            "data": {"message": error_msg},
+                        })
+                    else:
+                        output = turn_data.get("state", {}).get("output", {})
+                        content = output.get("content", "") if isinstance(output, dict) else ""
+                        await _set_incident_status(incident_id, "investigation_complete")
+                        await publish_event(incident_id, {
+                            "type": "investigation.completed",
+                            "data": {
+                                "session_id": session_id,
+                                "tools_called": tool_count,
+                                "summary": content[:2000] if content else "",
+                            },
+                        })
+                    return
+            except Exception:
+                pass
 
-            elif event_type == "error":
-                error_msg = event.get("message", "Stream lost")
-                await _set_incident_status(incident_id, "failed")
-                await publish_event(incident_id, {
-                    "type": "investigation.error",
-                    "data": {"message": error_msg},
-                })
-                return
+            if tool_count > 0:
+                poll_interval = 2.0
+
+        await _set_incident_status(incident_id, "failed")
+        await publish_event(incident_id, {
+            "type": "investigation.error",
+            "data": {"message": "Investigation timed out after 2 minutes"},
+        })
 
     except Exception as e:
         logger.error(f"Investigation failed: {e}", exc_info=True)

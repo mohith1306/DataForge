@@ -7,9 +7,10 @@ Provides:
 - Approval handling
 """
 
+import asyncio
 import logging
 
-from trueforge.agents import DATAFORGE_INVESTIGATOR_SPEC
+from trueforge.agents import get_investigator_spec
 from trueforge.client import TrueForgeClient, TrueForgeError
 
 logger = logging.getLogger(__name__)
@@ -18,9 +19,15 @@ logger = logging.getLogger(__name__)
 class TrueForgeRuntime:
     """Manages TrueForge integration for DataForge incidents."""
 
-    def __init__(self, base_url: str = "http://localhost:8790", token: str | None = None):
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8790",
+        token: str | None = None,
+        model_name: str = "google/gemini-3.1-flash-lite",
+    ):
         self.client = TrueForgeClient(base_url=base_url, token=token)
         self._agent_id: str | None = None
+        self._model_name = model_name
 
     async def ensure_agent(self) -> str:
         """Ensure the DataForge investigator agent exists, return its ID."""
@@ -41,7 +48,7 @@ class TrueForgeRuntime:
         try:
             payload = {
                 "name": "dataforge-investigator",
-                "manifest": DATAFORGE_INVESTIGATOR_SPEC,
+                "manifest": get_investigator_spec(self._model_name),
             }
             result = await self.client.create_agent(payload)
             self._agent_id = result.get("id")
@@ -65,35 +72,15 @@ class TrueForgeRuntime:
             f"Incident ID: {incident_id}\n"
             f"Type: {incident_type}\n"
             f"Description: {description}\n\n"
-            f"## Investigation Instructions\n\n"
-            f"Follow the DataOps investigation methodology:\n\n"
-            f"1. **Database Investigation**: Use `list_tables`, "
-            f"`describe_table`, `execute_select`, and `profile_column` "
-            f"to inspect data quality in ClickHouse.\n"
-            f"2. **Pipeline Investigation**: Use `get_pipeline_status`, "
-            f"`get_pipeline_logs`, and `get_failed_jobs` "
-            f"to check pipeline health.\n"
-            f"3. **GitHub Investigation**: Use `get_recent_commits` "
-            f"and `search_commits` "
-            f"to correlate code changes with the incident.\n"
-            f"4. **Evidence Collection**: "
-            f"Collect structured evidence from each investigation source.\n"
-            f"5. **Root Cause Analysis**: "
-            f"Correlate all evidence to identify the root cause "
-            f"with confidence level.\n"
-            f"6. **Remediation Plan**: "
-            f"Generate a remediation plan with risk assessment.\n"
-            f"7. **Verification**: "
-            f"After remediation, verify the fix worked.\n\n"
-            f"**Rules:**\n"
-            f"- Investigation tools are READ-ONLY "
-            f"— never modify data during investigation\n"
-            f"- Use the sandbox for numerical/statistical analysis\n"
-            f"- High-risk actions (rerun_pipeline, rollback_deployment) "
-            f"require human approval\n"
-            f"- Always verify remediation after execution\n"
-            f"- Distinguish evidence (facts) from hypotheses "
-            f"(interpretations)\n"
+            f"## Investigation Steps\n\n"
+            f"1. Get pipeline status: `get_pipeline_status` (no args)\n"
+            f"2. Get error logs: `get_pipeline_logs(pipeline_id=<id>)`\n"
+            f"3. Check recent commits: `get_recent_commits`\n"
+            f"4. If needed, explore data: `list_tables` → `describe_table` → `execute_select`\n\n"
+            f"## Rules\n"
+            f"- Read-only tools only during investigation\n"
+            f"- Be efficient, max 10 tool calls\n"
+            f"- Return structured summary: root_cause, confidence, evidence, remediation_plan"
         )
 
         try:
@@ -107,9 +94,15 @@ class TrueForgeRuntime:
                 message=message,
             )
 
+            turn_id = turn.get("id")
+            if not turn_id:
+                turns = await self.client.list_turns(session_id)
+                if turns:
+                    turn_id = turns[-1].get("id")
+
             return {
                 "session_id": session_id,
-                "turn_id": turn.get("id"),
+                "turn_id": turn_id,
                 "status": "started",
             }
         except TrueForgeError as e:

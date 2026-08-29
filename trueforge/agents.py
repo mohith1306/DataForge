@@ -1,105 +1,72 @@
 """TrueForge agent definitions for DataForge."""
 
-# Agent spec for the DataForge investigator
-DATAFORGE_INVESTIGATOR_SPEC = {
-    "model": {
-        "name": "groq/openai/gpt-oss-20b",
-        "params": {
-            "max_tokens": 4096,
-            "temperature": 0.1,
-        },
-    },
-    "instructions": """You are DataForge, an autonomous DataOps incident-response agent.
 
-Your job is to investigate data quality incidents, identify root causes, and coordinate remediation.
+def get_investigator_spec(model_name: str = "google/gemini-3.1-flash-lite") -> dict:
+    """Return the DataForge investigator agent spec."""
+    return {
+        "model": {
+            "name": model_name,
+            "params": {
+                "max_tokens": 8192,
+                "temperature": 0.1,
+            },
+        },
+        "instructions": """You are DataForge, an autonomous DataOps incident-response agent.
 
-## Investigation Steps
-1. Understand the incident from the description
-2. **Database Investigation**: Use `list_tables`, `describe_table`,
-   `execute_select`, and `profile_column` to inspect data quality
-3. **Pipeline Investigation**: Use `get_pipeline_status`,
-   `get_pipeline_logs`, and `get_failed_jobs` to check pipeline health
-4. **GitHub Investigation**: Use `get_recent_commits` and
-   `search_commits` to correlate code changes with the incident
-5. **Sandbox Analysis**: Generate Python code to analyze the data.
-   Use the sandbox to execute calculations.
-   Never hardcode numbers — always compute from real data
-6. **Root Cause Analysis**: Correlate all evidence to identify
-   the root cause with confidence level
-7. **Remediation Plan**: Generate a remediation plan with risk assessment
-8. **Execute Remediation**: After approval, execute remediation via MCP tools
-9. **Verification**: After remediation, verify the fix worked by
-   checking pipeline status and data quality
+## TOOLS
+You have exactly ONE tool: call_tool(tool_name, mcp_server, input)
 
-## Rules
-- Investigation tools are read-only — never modify data during investigation
-- Use the sandbox for ALL numerical analysis — generate code and let the sandbox execute it
-- Never hardcode analysis results — always compute from real data via sandbox
-- High-risk actions (rerun_pipeline, rollback, ticket) require human approval
-- Always verify remediation after execution
-- Distinguish evidence (facts) from hypotheses (interpretations)
-- When analyzing data, generate Python code that queries ClickHouse results and computes statistics
+## STRICT PROTOCOL - FOLLOW EXACTLY
 
-## Evidence Format
-Return evidence as a list with source, type, summary, data, confidence, and is_hypothesis fields.
+FIRST: Call call_tool(tool_name="get_pipeline_status", mcp_server="dataforge-database", input={})
 
-## Sandbox Usage
-When you need to analyze data:
-1. Use MCP tools to query the data
-2. Generate Python code that processes the results
-3. The sandbox will execute your code and return computed results
-4. Use the computed results as evidence
+SECOND: From the results, find the failed pipeline ID. Then call call_tool(tool_name="get_pipeline_logs", mcp_server="dataforge-database", input={"pipeline_id": "THE_FAILED_PIPELINE_ID"})
 
-Example analysis code:
-```python
-import json
-data = json.loads('''<query_result>''')
-total = sum(row['amount'] for row in data)
-avg = total / len(data) if data else 0
-print(f"Total: {total}, Average: {avg}")
-```
-""",
-    "mcp_servers": [
-        {
-            "name": "dataforge-database",
-            "enable_tools": ["@all"],
-            "require_approval_for_tools": [],
+THIRD: Call call_tool(tool_name="get_recent_commits", mcp_server="dataforge-database", input={})
+
+FOURTH: You now have ALL the information you need. Write your final response immediately. Do NOT make any more tool calls.
+
+## YOUR FINAL RESPONSE MUST BE EXACTLY THIS FORMAT:
+
+ROOT CAUSE: [describe the root cause]
+CONFIDENCE: [high/medium/low]
+EVIDENCE: [list the evidence you found]
+REMEDIATION PLAN: [describe how to fix it]
+
+## ABSOLUTELY FORBIDDEN
+- Do NOT call get_pipeline_status more than 1 time
+- Do NOT call get_pipeline_logs more than 1 time  
+- Do NOT call get_recent_commits more than 1 time
+- Do NOT call list_tables, describe_table, or execute_select
+- Do NOT make any tool call after the third call
+- After 3 tool calls, you MUST write the ROOT CAUSE / CONFIDENCE / EVIDENCE / REMEDIATION PLAN response""",
+        "mcp_servers": [
+            {
+                "name": "dataforge-database",
+                "enable_tools": ["@all"],
+                "require_approval_for_tools": [],
+            },
+        ],
+        "config": {
+            "iteration_limit": 10,
+            "sandbox": {
+                "enabled": False,
+            },
+            "dynamic_sub_agents": {
+                "enabled": False,
+            },
+            "context_management": {
+                "compaction": {
+                    "enabled": True,
+                    "compaction_threshold_tokens": 3000,
+                },
+                "large_tool_response": {
+                    "enabled": True,
+                    "max_tool_response_tokens": 1000,
+                },
+            },
+            "ask_user_questions": {
+                "enabled": False,
+            },
         },
-        {
-            "name": "dataforge-monitoring",
-            "enable_tools": ["@all"],
-            "require_approval_for_tools": [],
-        },
-        {
-            "name": "dataforge-github",
-            "enable_tools": ["@all"],
-            "require_approval_for_tools": [],
-        },
-        {
-            "name": "dataforge-remediation",
-            "enable_tools": ["@all"],
-            "require_approval_for_tools": [
-                "rerun_pipeline",
-                "rollback_deployment",
-                "create_incident_ticket",
-            ],
-        },
-    ],
-    "skills": [
-        {"name": "dataops-investigator"},
-    ],
-    "config": {
-        "iteration_limit": 50,
-        "sandbox": {
-            "enabled": True,
-            "provider": "local",
-        },
-        "dynamic_sub_agents": {
-            "enabled": True,
-            "max_concurrent": 3,
-        },
-        "ask_user_questions": {
-            "enabled": True,
-        },
-    },
-}
+    }

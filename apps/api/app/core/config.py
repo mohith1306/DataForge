@@ -18,7 +18,8 @@ class Settings(BaseSettings):
 
     # LLM
     groq_api_key: str = ""
-    model_name: str = "qwen/qwen3.6-27b"
+    gemini_api_key: str = ""
+    model_name: str = "google/gemini-3.1-flash-lite"
 
     # GitHub
     github_repo: str = "mohith1306/DataForge"
