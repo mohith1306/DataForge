@@ -17,12 +17,41 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 CONFIG_FILE = Path("dataforge.schema.json")
+
+# ── SQL Identifier Validation ──────────────────────────────────────────────────
+
+_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def validate_identifier(name: str, label: str = "identifier") -> str:
+    """Validate a SQL identifier (table/column name). Raises ValueError if unsafe."""
+    if not name or not _IDENTIFIER_RE.match(name):
+        raise ValueError(
+            f"Invalid {label}: '{name}'. "
+            "Must start with a letter or underscore, contain only alphanumeric characters and underscores."
+        )
+    return name
+
+
+def validate_schema_identifiers(schema: dict[str, Any]) -> None:
+    """Validate all identifiers in a schema mapping before saving."""
+    validate_identifier(schema.get("pipeline_table", ""), "pipeline_table")
+    pc = schema.get("pipeline_columns", {})
+    for key, val in pc.items():
+        validate_identifier(val, f"pipeline_columns.{key}")
+    qt = schema.get("quality_table", "")
+    if qt:
+        validate_identifier(qt, "quality_table")
+        qc = schema.get("quality_columns", {})
+        for key, val in qc.items():
+            validate_identifier(val, f"quality_columns.{key}")
 
 
 # ── Default schema (matches ClickHouse init.sql) ──────────────────────────────

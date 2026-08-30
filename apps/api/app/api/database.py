@@ -74,6 +74,7 @@ async def setup_database(input: SchemaMappingInput) -> SetupResponse:
         save_schema,
         generate_create_table_sql,
         generate_monitor_sql,
+        validate_schema_identifiers,
     )
 
     # Build schema mapping
@@ -84,6 +85,12 @@ async def setup_database(input: SchemaMappingInput) -> SetupResponse:
         "quality_columns": input.quality_columns,
         "status_values": input.status_values,
     }
+
+    # Validate all identifiers before saving (prevents SQL injection)
+    try:
+        validate_schema_identifiers(schema)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     # Save to file
     save_schema(schema)
