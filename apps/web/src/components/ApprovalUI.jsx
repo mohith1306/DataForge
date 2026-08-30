@@ -8,9 +8,19 @@ export default function ApprovalUI({ events, incident }) {
   const planEvent = events?.find(e => e.type === 'plan.created');
   const approvalEvent = events?.find(e => e.type?.includes('approval'));
 
-  const plan = planEvent?.metadata_ || {};
+  // Parse REMEDIATION PLAN from investigation_complete text
+  const completedEvent = events?.find(e => e.type === 'investigation_complete' || e.type === 'investigation.completed');
+  let parsedPlan = null;
+  if (completedEvent?.message && !planEvent) {
+    const remMatch = completedEvent.message.match(/REMEDIATION(?:\s*PLAN)?:\s*([\s\S]*?)$/i);
+    if (remMatch) {
+      parsedPlan = { summary: remMatch[1].trim() };
+    }
+  }
 
-  if (!planEvent && !approvalEvent) {
+  const plan = planEvent?.metadata_ || parsedPlan;
+
+  if (!planEvent && !approvalEvent && !parsedPlan) {
     return (
       <div className="empty-state">
         <p>No remediation plan yet</p>

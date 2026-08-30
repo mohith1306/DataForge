@@ -24,7 +24,7 @@ class TrueForgeRuntime:
         self,
         base_url: str = "http://localhost:8790",
         token: str | None = None,
-        model_name: str = "google/gemini-2.0-flash",
+        model_name: str = "google/gemini-3.6-flash",
     ):
         self.client = TrueForgeClient(base_url=base_url, token=token)
         self._agent_id: str | None = None

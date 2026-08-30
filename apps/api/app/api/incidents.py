@@ -42,6 +42,7 @@ def _incident_to_dict(inc: Incident) -> dict:
         "severity": inc.severity,
         "status": inc.status,
         "incident_type": inc.incident_type,
+        "connector_id": inc.connector_id,
         "trueforge_session_id": inc.trueforge_session_id,
         "verification_result": inc.verification_result,
     }

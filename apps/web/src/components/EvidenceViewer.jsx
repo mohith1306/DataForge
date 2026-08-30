@@ -31,7 +31,25 @@ export default function EvidenceViewer({ events }) {
     );
   }) || [];
 
-  if (evidenceEvents.length === 0) {
+  // Also parse EVIDENCE from investigation_complete text
+  const completedEvent = events?.find(e => e.type === 'investigation_complete' || e.type === 'investigation.completed');
+  const parsedEvidence = [];
+  if (completedEvent?.message) {
+    const msg = completedEvent.message;
+    const evMatch = msg.match(/EVIDENCE:\s*([\s\S]*?)(?=\nREMEDIATION|\nROOT CAUSE|\nCONFIDENCE|$)/i);
+    if (evMatch) {
+      parsedEvidence.push({
+        id: 'parsed-evidence',
+        type: 'investigation_result',
+        agent: 'investigator',
+        message: evMatch[1].trim(),
+      });
+    }
+  }
+
+  const allEvidence = [...evidenceEvents, ...parsedEvidence];
+
+  if (allEvidence.length === 0) {
     return (
       <div className="empty-state">
         <p>No evidence collected yet</p>
@@ -43,7 +61,7 @@ export default function EvidenceViewer({ events }) {
   }
 
   // Group by source derived from event type or agent field
-  const grouped = evidenceEvents.reduce((acc, event) => {
+  const grouped = allEvidence.reduce((acc, event) => {
     let source = event.agent || 'system';
     // Derive source from event type if agent is generic
     if (source === 'system' || !source) {
