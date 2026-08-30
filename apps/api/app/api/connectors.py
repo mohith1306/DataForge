@@ -16,13 +16,14 @@ router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 class AddConnectorRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    db_type: str = Field(..., pattern="^(postgres|mysql|clickhouse)$")
+    db_type: str = Field(..., pattern="^(postgres|mysql|clickhouse|snowflake|databricks)$")
     host: str = Field(..., min_length=1)
     port: int = Field(default=5432)
     database: str = Field(..., min_length=1)
     username: str = ""
     password: str = ""
     schema: str = "public"
+    extra: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
     poll_interval: int = Field(default=30, ge=5, le=3600)
 
@@ -36,6 +37,15 @@ async def list_connectors():
 @router.post("")
 async def add_connector(req: AddConnectorRequest):
     """Add a new database connector — auto-discovers tables and starts monitoring."""
+    # Set schema default based on db type
+    schema = req.schema
+    if req.db_type == "clickhouse":
+        schema = req.database
+    elif req.db_type == "snowflake":
+        schema = req.schema or "PUBLIC"
+    elif req.db_type == "databricks":
+        schema = req.schema or "default"
+
     config = ConnectorConfig(
         id=f"conn_{uuid.uuid4().hex[:12]}",
         name=req.name,
@@ -45,7 +55,8 @@ async def add_connector(req: AddConnectorRequest):
         database=req.database,
         username=req.username,
         password=req.password,
-        schema=req.schema if req.db_type != "clickhouse" else req.database,
+        schema=schema,
+        extra=req.extra,
         enabled=req.enabled,
         poll_interval=req.poll_interval,
     )

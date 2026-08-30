@@ -12,6 +12,16 @@ const DB_TYPES = [
   { id: 'clickhouse', label: 'ClickHouse', icon: '🏗️', defaultPort: 8123, defaultSchema: '' },
   { id: 'postgres', label: 'PostgreSQL', icon: '🐘', defaultPort: 5432, defaultSchema: 'public' },
   { id: 'mysql', label: 'MySQL', icon: '🐬', defaultPort: 3306, defaultSchema: '' },
+  { id: 'snowflake', label: 'Snowflake', icon: '❄️', defaultPort: 443, defaultSchema: 'PUBLIC',
+    extraFields: [
+      { key: 'warehouse', label: 'Warehouse', placeholder: 'COMPUTE_WH' },
+      { key: 'role', label: 'Role', placeholder: 'SYSADMIN' },
+    ]},
+  { id: 'databricks', label: 'Databricks', icon: '🧱', defaultPort: 443, defaultSchema: 'default',
+    extraFields: [
+      { key: 'http_path', label: 'HTTP Path', placeholder: '/sql/1.0/warehouses/xxx' },
+      { key: 'token', label: 'Access Token', placeholder: 'dapi...', type: 'password' },
+    ]},
 ];
 
 export default function Connectors() {
@@ -28,6 +38,7 @@ export default function Connectors() {
     username: 'default',
     password: '',
     poll_interval: 30,
+    extra: {},
   });
   const [connecting, setConnecting] = useState(false);
   const [result, setResult] = useState(null);
@@ -57,10 +68,12 @@ export default function Connectors() {
     setForm(f => ({
       ...f,
       name: '',
+      host: dbType === 'databricks' ? '' : 'localhost',
       port: db.defaultPort,
       database: '',
-      username: dbType === 'clickhouse' ? 'default' : '',
+      username: dbType === 'clickhouse' ? 'default' : dbType === 'databricks' ? '' : '',
       password: '',
+      extra: {},
     }));
   }
 
@@ -336,6 +349,26 @@ export default function Connectors() {
             />
           </div>
         </div>
+
+        {/* Extra fields for Snowflake / Databricks */}
+        {DB_TYPES.find(d => d.id === selectedDb)?.extraFields && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+            {DB_TYPES.find(d => d.id === selectedDb).extraFields.map(field => (
+              <div key={field.key}>
+                <label style={{ display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' }}>
+                  {field.label}
+                </label>
+                <input
+                  type={field.type || 'text'}
+                  value={form.extra[field.key] || ''}
+                  onChange={e => setForm(f => ({ ...f, extra: { ...f.extra, [field.key]: e.target.value } }))}
+                  placeholder={field.placeholder}
+                  style={{ width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
 
         {error && (
           <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{error}</div>

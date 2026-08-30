@@ -31,6 +31,12 @@ def _get_connector_class(db_type: str) -> type[DatabaseConnector]:
     elif db_type == "clickhouse":
         from apps.api.app.services.connectors.clickhouse import ClickHouseConnector
         return ClickHouseConnector
+    elif db_type == "snowflake":
+        from apps.api.app.services.connectors.snowflake import SnowflakeConnector
+        return SnowflakeConnector
+    elif db_type == "databricks":
+        from apps.api.app.services.connectors.databricks import DatabricksConnector
+        return DatabricksConnector
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
