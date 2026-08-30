@@ -133,6 +133,8 @@ export default function Connectors() {
       setResult(res);
       setShowForm(false);
       loadConnectors();
+      // Redirect to dashboard after 1.5s so user sees the connector
+      setTimeout(() => navigate('/dashboard'), 1500);
     } catch (err) {
       console.error('[Connectors] Error:', err);
       const msg = err?.message || err?.detail || (typeof err === 'string' ? err : 'Connection failed');
