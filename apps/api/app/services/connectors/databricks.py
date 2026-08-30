@@ -25,7 +25,13 @@ class DatabricksConnector(DatabaseConnector):
 
     def __init__(self, config: ConnectorConfig):
         super().__init__(config)
-        self._host = config.host.rstrip("/")
+        host = config.host.rstrip("/")
+        # Fix common typos: httpds:// → https://
+        if host.startswith("httpds://"):
+            host = "https://" + host[len("httpds://"):]
+        elif not host.startswith("http"):
+            host = "https://" + host
+        self._host = host
         self._token = config.extra.get("token", config.password)
         self._http_path = config.extra.get("http_path", "")
 
@@ -38,21 +44,43 @@ class DatabricksConnector(DatabaseConnector):
 
     async def connect(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            url = f"{self._host}/api/2.0/sql/statements/"
+            logger.info("Connecting to Databricks: %s", url)
+            async with httpx.AsyncClient(timeout=30, verify=True) as client:
                 resp = await client.post(
-                    f"{self._host}/api/2.0/sql/statements/",
+                    url,
                     headers=self._headers,
                     json={
                         "statement": "SELECT 1",
                         "warehouse_id": self._http_path.split("/")[-1] if self._http_path else "",
                     },
                 )
+                logger.info("Databricks response: %d %s", resp.status_code, resp.text[:200])
                 if resp.status_code in (200, 400):
-                    # 400 means auth works but query might have issues — connection is valid
                     logger.info("Connected to Databricks: %s", self._host)
                     return True
-                logger.warning("Databricks connect status: %d %s", resp.status_code, resp.text[:200])
+                # Parse Databricks error message
+                try:
+                    err = resp.json()
+                    msg = err.get("message", resp.text[:200])
+                except Exception:
+                    msg = resp.text[:200]
+                logger.warning("Databricks connect failed: %d %s", resp.status_code, msg)
+                # Store error message for caller
+                self._last_error = f"HTTP {resp.status_code}: {msg}"
                 return False
+        except httpx.ConnectError as e:
+            logger.error("Databricks connection error (check network/URL): %s", e)
+            self._last_error = f"Connection refused: {e}"
+            return False
+        except httpx.TimeoutException:
+            logger.error("Databricks connection timed out (30s)")
+            self._last_error = "Connection timed out after 30s"
+            return False
+        except Exception as e:
+            logger.error("Databricks connection failed: %s", type(e).__name__, e)
+            self._last_error = str(e)
+            return False
         except Exception as e:
             logger.error("Databricks connection failed: %s", e)
             return False

@@ -95,7 +95,9 @@ class ConnectorRegistry:
         # Test connection
         connected = await connector.connect()
         if not connected:
-            return {"status": "error", "message": f"Could not connect to {config.db_type} at {config.host}:{config.port}"}
+            host = getattr(connector, '_host', config.host)
+            err = getattr(connector, '_last_error', 'unknown error')
+            return {"status": "error", "message": f"Could not connect to {config.db_type} at {host}: {err}"}
 
         # Auto-discover tables
         try:
