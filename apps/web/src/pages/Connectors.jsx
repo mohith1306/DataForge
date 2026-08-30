@@ -9,20 +9,50 @@ import {
 } from '../api';
 
 const DB_TYPES = [
-  { id: 'clickhouse', label: 'ClickHouse', icon: '🏗️', defaultPort: 8123, defaultSchema: '' },
-  { id: 'postgres', label: 'PostgreSQL', icon: '🐘', defaultPort: 5432, defaultSchema: 'public' },
-  { id: 'mysql', label: 'MySQL', icon: '🐬', defaultPort: 3306, defaultSchema: '' },
-  { id: 'snowflake', label: 'Snowflake', icon: '❄️', defaultPort: 443, defaultSchema: 'PUBLIC',
-    extraFields: [
-      { key: 'warehouse', label: 'Warehouse', placeholder: 'COMPUTE_WH' },
-      { key: 'role', label: 'Role', placeholder: 'SYSADMIN' },
-    ]},
-  { id: 'databricks', label: 'Databricks', icon: '🧱', defaultPort: 443, defaultSchema: 'default',
-    extraFields: [
-      { key: 'http_path', label: 'HTTP Path', placeholder: '/sql/1.0/warehouses/xxx' },
-      { key: 'token', label: 'Access Token', placeholder: 'dapi...', type: 'password' },
-    ]},
+  {
+    id: 'clickhouse', label: 'ClickHouse', icon: '🏗️',
+    fields: ['name', 'host', 'port', 'database', 'username', 'password', 'poll_interval'],
+    defaults: { host: 'localhost', port: 8123, username: 'default' },
+  },
+  {
+    id: 'postgres', label: 'PostgreSQL', icon: '🐘',
+    fields: ['name', 'host', 'port', 'database', 'username', 'password', 'schema', 'poll_interval'],
+    defaults: { host: 'localhost', port: 5432, schema: 'public' },
+  },
+  {
+    id: 'mysql', label: 'MySQL', icon: '🐬',
+    fields: ['name', 'host', 'port', 'database', 'username', 'password', 'poll_interval'],
+    defaults: { host: 'localhost', port: 3306 },
+  },
+  {
+    id: 'snowflake', label: 'Snowflake', icon: '❄️',
+    fields: ['name', 'account', 'database', 'schema', 'username', 'password', 'warehouse', 'role', 'poll_interval'],
+    defaults: { schema: 'PUBLIC', warehouse: 'COMPUTE_WH', role: 'SYSADMIN' },
+  },
+  {
+    id: 'databricks', label: 'Databricks', icon: '🧱',
+    fields: ['name', 'workspace_url', 'http_path', 'catalog', 'token', 'poll_interval'],
+    defaults: {},
+  },
 ];
+
+const FIELD_DEFS = {
+  name:           { label: 'Connection Name', placeholder: 'My Production DB', type: 'text', required: true, half: true },
+  host:           { label: 'Host', placeholder: 'localhost', type: 'text', required: true, flex: 2 },
+  port:           { label: 'Port', type: 'number', required: true, flex: 1 },
+  database:       { label: 'Database', placeholder: 'my_db', type: 'text', required: true, half: true },
+  schema:         { label: 'Schema', placeholder: 'public', type: 'text', half: true },
+  username:       { label: 'Username', type: 'text', third: true },
+  password:       { label: 'Password', type: 'password', third: true },
+  poll_interval:  { label: 'Check Interval (sec)', type: 'number', min: 5, third: true },
+  account:        { label: 'Account', placeholder: 'your-account.snowflakecomputing.com', type: 'text', required: true, flex: 2 },
+  warehouse:      { label: 'Warehouse', placeholder: 'COMPUTE_WH', type: 'text', third: true },
+  role:           { label: 'Role', placeholder: 'SYSADMIN', type: 'text', third: true },
+  workspace_url:  { label: 'Workspace URL', placeholder: 'https://dbc-xxx.cloud.databricks.com', type: 'text', required: true, flex: 2 },
+  http_path:      { label: 'HTTP Path', placeholder: '/sql/1.0/warehouses/xxx', type: 'text', required: true, flex: 2 },
+  catalog:        { label: 'Catalog', placeholder: 'hive_metastore', type: 'text', required: true, half: true },
+  token:          { label: 'Access Token', placeholder: 'dapi...', type: 'password', required: true, half: true },
+};
 
 export default function Connectors() {
   const navigate = useNavigate();
@@ -30,16 +60,7 @@ export default function Connectors() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [selectedDb, setSelectedDb] = useState('clickhouse');
-  const [form, setForm] = useState({
-    name: '',
-    host: 'localhost',
-    port: 8123,
-    database: '',
-    username: 'default',
-    password: '',
-    poll_interval: 30,
-    extra: {},
-  });
+  const [form, setForm] = useState({ name: '', poll_interval: 30 });
   const [connecting, setConnecting] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -65,16 +86,7 @@ export default function Connectors() {
   function handleDbSelect(dbType) {
     const db = DB_TYPES.find(d => d.id === dbType);
     setSelectedDb(dbType);
-    setForm(f => ({
-      ...f,
-      name: '',
-      host: dbType === 'databricks' ? '' : 'localhost',
-      port: db.defaultPort,
-      database: '',
-      username: dbType === 'clickhouse' ? 'default' : dbType === 'databricks' ? '' : '',
-      password: '',
-      extra: {},
-    }));
+    setForm({ name: '', poll_interval: 30, ...db.defaults });
   }
 
   async function handleConnect(e) {
@@ -84,11 +96,40 @@ export default function Connectors() {
     setResult(null);
 
     try {
-      const res = await addConnector({
-        ...form,
+      // Map form fields to API payload based on db type
+      const payload = {
+        name: form.name,
         db_type: selectedDb,
-        schema: DB_TYPES.find(d => d.id === selectedDb)?.defaultSchema || '',
-      });
+        poll_interval: form.poll_interval,
+        extra: {},
+      };
+
+      if (selectedDb === 'databricks') {
+        payload.host = form.workspace_url || '';
+        payload.port = 443;
+        payload.database = form.catalog || '';
+        payload.username = '';
+        payload.password = form.token || '';
+        payload.schema = 'default';
+        payload.extra = { http_path: form.http_path || '', token: form.token || '' };
+      } else if (selectedDb === 'snowflake') {
+        payload.host = form.account || '';
+        payload.port = 443;
+        payload.database = form.database || '';
+        payload.username = form.username || '';
+        payload.password = form.password || '';
+        payload.schema = form.schema || 'PUBLIC';
+        payload.extra = { warehouse: form.warehouse || 'COMPUTE_WH', role: form.role || 'SYSADMIN' };
+      } else {
+        payload.host = form.host || '';
+        payload.port = form.port || 5432;
+        payload.database = form.database || '';
+        payload.username = form.username || '';
+        payload.password = form.password || '';
+        payload.schema = form.schema || '';
+      }
+
+      const res = await addConnector(payload);
       setResult(res);
       setShowForm(false);
       loadConnectors();
@@ -172,7 +213,7 @@ export default function Connectors() {
                   <div>
                     <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{conn.name}</div>
                     <div style={{ color: '#888', fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                      {conn.db_type} · {conn.host}:{conn.port}/{conn.database}
+                      {conn.db_type} · {conn.db_type === 'databricks' ? conn.host : `${conn.host}:${conn.port}`}{conn.database ? `/${conn.database}` : ''}
                     </div>
                     <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
                       <span className={`badge ${conn.monitoring ? 'badge-resolved' : 'badge-created'}`}>
@@ -256,119 +297,109 @@ export default function Connectors() {
 
       {/* Connection Form */}
       <form onSubmit={handleConnect} className="card" style={{ padding: '1.5rem' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' }}>
-              Connection Name
-            </label>
-            <input
-              type="text"
-              value={form.name}
-              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              placeholder="My Production DB"
-              required
-              style={{ width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' }}
-            />
-          </div>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' }}>
-              Database Name
-            </label>
-            <input
-              type="text"
-              value={form.database}
-              onChange={e => setForm(f => ({ ...f, database: e.target.value }))}
-              placeholder="dataforge"
-              required
-              style={{ width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' }}
-            />
-          </div>
-        </div>
+        {/* Dynamic fields based on selected DB type */}
+        {(() => {
+          const db = DB_TYPES.find(d => d.id === selectedDb);
+          const fields = db.fields;
+          const rows = [];
+          let i = 0;
+          const inputStyle = { width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' };
+          const labelStyle = { display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' };
 
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' }}>
-              Host
-            </label>
-            <input
-              type="text"
-              value={form.host}
-              onChange={e => setForm(f => ({ ...f, host: e.target.value }))}
-              placeholder="localhost"
-              required
-              style={{ width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' }}
-            />
-          </div>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' }}>
-              Port
-            </label>
-            <input
-              type="number"
-              value={form.port}
-              onChange={e => setForm(f => ({ ...f, port: parseInt(e.target.value) || 0 }))}
-              required
-              style={{ width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' }}
-            />
-          </div>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' }}>
-              Username
-            </label>
-            <input
-              type="text"
-              value={form.username}
-              onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
-              style={{ width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' }}
-            />
-          </div>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' }}>
-              Password
-            </label>
-            <input
-              type="password"
-              value={form.password}
-              onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-              style={{ width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' }}
-            />
-          </div>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' }}>
-              Check Interval (sec)
-            </label>
-            <input
-              type="number"
-              value={form.poll_interval}
-              onChange={e => setForm(f => ({ ...f, poll_interval: parseInt(e.target.value) || 30 }))}
-              min="5"
-              style={{ width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' }}
-            />
-          </div>
-        </div>
-
-        {/* Extra fields for Snowflake / Databricks */}
-        {DB_TYPES.find(d => d.id === selectedDb)?.extraFields && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-            {DB_TYPES.find(d => d.id === selectedDb).extraFields.map(field => (
-              <div key={field.key}>
-                <label style={{ display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' }}>
-                  {field.label}
-                </label>
-                <input
-                  type={field.type || 'text'}
-                  value={form.extra[field.key] || ''}
-                  onChange={e => setForm(f => ({ ...f, extra: { ...f.extra, [field.key]: e.target.value } }))}
-                  placeholder={field.placeholder}
-                  style={{ width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' }}
-                />
-              </div>
-            ))}
-          </div>
-        )}
+          while (i < fields.length) {
+            const f = FIELD_DEFS[fields[i]];
+            // Check if next fields can share a row
+            if (f.half && i + 1 < fields.length && FIELD_DEFS[fields[i + 1]]?.half) {
+              rows.push(
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                  {[fields[i], fields[i + 1]].map(fk => {
+                    const fd = FIELD_DEFS[fk];
+                    return (
+                      <div key={fk}>
+                        <label style={labelStyle}>{fd.label}{fd.required && ' *'}</label>
+                        <input
+                          type={fd.type}
+                          value={form[fk] || ''}
+                          onChange={e => setForm(frm => ({ ...frm, [fk]: fd.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value }))}
+                          placeholder={fd.placeholder}
+                          required={fd.required}
+                          min={fd.min}
+                          style={inputStyle}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+              i += 2;
+            } else if (f.flex && i + 1 < fields.length && FIELD_DEFS[fields[i + 1]]?.flex) {
+              const cols = f.flex + FIELD_DEFS[fields[i + 1]].flex;
+              rows.push(
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: `${f.flex}fr ${FIELD_DEFS[fields[i + 1]].flex}fr`, gap: '1rem', marginBottom: '1rem' }}>
+                  {[fields[i], fields[i + 1]].map(fk => {
+                    const fd = FIELD_DEFS[fk];
+                    return (
+                      <div key={fk}>
+                        <label style={labelStyle}>{fd.label}{fd.required && ' *'}</label>
+                        <input
+                          type={fd.type}
+                          value={form[fk] || ''}
+                          onChange={e => setForm(frm => ({ ...frm, [fk]: fd.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value }))}
+                          placeholder={fd.placeholder}
+                          required={fd.required}
+                          min={fd.min}
+                          style={inputStyle}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+              i += 2;
+            } else if (f.third && i + 2 < fields.length && FIELD_DEFS[fields[i + 1]]?.third && FIELD_DEFS[fields[i + 2]]?.third) {
+              rows.push(
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                  {[fields[i], fields[i + 1], fields[i + 2]].map(fk => {
+                    const fd = FIELD_DEFS[fk];
+                    return (
+                      <div key={fk}>
+                        <label style={labelStyle}>{fd.label}{fd.required && ' *'}</label>
+                        <input
+                          type={fd.type}
+                          value={form[fk] || ''}
+                          onChange={e => setForm(frm => ({ ...frm, [fk]: fd.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value }))}
+                          placeholder={fd.placeholder}
+                          required={fd.required}
+                          min={fd.min}
+                          style={inputStyle}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+              i += 3;
+            } else {
+              // Single field, full width
+              rows.push(
+                <div key={i} style={{ marginBottom: '1rem' }}>
+                  <label style={labelStyle}>{f.label}{f.required && ' *'}</label>
+                  <input
+                    type={f.type}
+                    value={form[fields[i]] || ''}
+                    onChange={e => setForm(frm => ({ ...frm, [fields[i]]: f.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value }))}
+                    placeholder={f.placeholder}
+                    required={f.required}
+                    min={f.min}
+                    style={inputStyle}
+                  />
+                </div>
+              );
+              i += 1;
+            }
+          }
+          return rows;
+        })()}
 
         {error && (
           <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{error}</div>

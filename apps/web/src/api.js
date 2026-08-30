@@ -12,15 +12,10 @@ export async function listConnectors() {
 
 export async function addConnector(data) {
   console.log('[API] POST /connectors', data.name, data.db_type);
-  // For Databricks, the token goes in extra.token, not password
-  const payload = { ...data };
-  if (data.db_type === 'databricks' && data.extra?.token) {
-    payload.password = data.extra.token;
-  }
   const res = await fetch(`${API_BASE}/connectors`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(data),
   });
   console.log('[API] Response:', res.status);
   if (!res.ok) {
