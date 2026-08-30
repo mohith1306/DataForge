@@ -157,7 +157,7 @@ async def get_schema_example() -> dict:
     }
 
 
-@router.post("/test-connection")
+@router.get("/test-connection")
 async def test_connection() -> dict:
     """Test that the database adapter can connect and run queries."""
     from apps.api.app.services.db_adapter import create_monitor_adapter
