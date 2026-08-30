@@ -108,6 +108,29 @@ class SnowflakeConnector(DatabaseConnector):
         schema = schema or self.config.schema or "PUBLIC"
         return self._execute_val_sync(f"SELECT COUNT(*) FROM {self.config.database}.{schema}.{table}") or 0
 
+    def get_inject_sql(self) -> list[str]:
+        schema = self.config.schema or "PUBLIC"
+        qualified = f"{self.config.database}.{schema}.pipeline_events"
+
+        return [
+            f"""CREATE TABLE IF NOT EXISTS {qualified} (
+                pipeline_id VARCHAR(100),
+                pipeline_name VARCHAR(200),
+                status VARCHAR(20),
+                started_at TIMESTAMP_NTZ,
+                error_message TEXT,
+                rows_processed INT
+            )""",
+            f"""INSERT INTO {qualified} VALUES
+                ('PL-FAIL-001', 'revenue-etl', 'FAILED', DATEADD(minute, -10, CURRENT_TIMESTAMP()), 'Connection timeout to upstream service', 0),
+                ('PL-FAIL-002', 'user-sync', 'FAILED', DATEADD(minute, -5, CURRENT_TIMESTAMP()), 'NULL constraint violation on user_id', 0),
+                ('PL-FAIL-003', 'order-processing', 'FAILED', DATEADD(minute, -2, CURRENT_TIMESTAMP()), 'Disk space exceeded', 0),
+                ('PL-STALE-001', 'inventory-sync', 'SUCCESS', DATEADD(minute, -90, CURRENT_TIMESTAMP()), NULL, 15234),
+                ('PL-STALE-002', 'analytics-daily', 'SUCCESS', DATEADD(minute, -120, CURRENT_TIMESTAMP()), NULL, 89012),
+                ('PL-OK-001', 'email-campaign', 'SUCCESS', DATEADD(minute, -3, CURRENT_TIMESTAMP()), NULL, 3456),
+                ('PL-OK-002', 'report-gen', 'SUCCESS', DATEADD(minute, -8, CURRENT_TIMESTAMP()), NULL, 7890)""",
+        ]
+
     def build_monitoring_queries(self, mapping: "TableMapping") -> dict[str, str]:
         """Snowflake-specific SQL syntax."""
         if mapping.table_type != "pipeline":

@@ -126,3 +126,49 @@ async def stop_monitoring(connector_id: str):
     """Stop background monitoring for a connector."""
     await registry.stop_monitoring(connector_id)
     return {"status": "stopped", "connector_id": connector_id}
+
+
+@router.post("/{connector_id}/inject")
+async def inject_test_data(connector_id: str):
+    """Inject test data (pipeline_events table) into the connector's database."""
+    connector = registry._connectors.get(connector_id)
+    if not connector:
+        config = registry._configs.get(connector_id)
+        if not config:
+            raise HTTPException(status_code=404, detail="Connector not found")
+        from apps.api.app.services.connectors.registry import _get_connector_class
+        cls = _get_connector_class(config.db_type)
+        connector = cls(config)
+        await connector.connect()
+
+    try:
+        sqls = connector.get_inject_sql()
+        results = []
+        for sql in sqls:
+            try:
+                if hasattr(connector, 'execute_non_query'):
+                    await connector.execute_non_query(sql)
+                else:
+                    await connector.execute_query(sql)
+                results.append({"status": "ok", "sql": sql[:80] + "..."})
+            except Exception as e:
+                results.append({"status": "error", "error": str(e), "sql": sql[:80] + "..."})
+
+        # Re-discover tables after injection
+        mappings = await connector.auto_discover()
+        config = registry._configs.get(connector_id)
+        if config:
+            config.discovered_tables = [
+                {"table": m.table_name, "type": m.table_type, "columns": m.columns, "row_count": m.row_count, "confidence": m.confidence}
+                for m in mappings
+            ]
+            registry._save()
+
+        return {
+            "status": "success",
+            "tables_created": len([r for r in results if r["status"] == "ok"]),
+            "discovered_tables": len(mappings),
+            "results": results,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

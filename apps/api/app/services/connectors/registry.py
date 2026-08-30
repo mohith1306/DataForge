@@ -194,7 +194,19 @@ class ConnectorRegistry:
         """Run a single monitoring check for a connector."""
         connector = self._connectors.get(connector_id)
         if not connector:
-            return {"status": "error", "message": "Connector not found"}
+            # Try creating from config
+            config = self._configs.get(connector_id)
+            if not config:
+                return {"status": "error", "message": "Connector not found"}
+            cls = _get_connector_class(config.db_type)
+            connector = cls(config)
+            self._connectors[connector_id] = connector
+
+        # Ensure connected
+        try:
+            await connector.connect()
+        except Exception:
+            pass
 
         config = self._configs.get(connector_id)
         if not config or not config.enabled:

@@ -251,3 +251,28 @@ FROM {qualified}"""
         d = asdict(self.config)
         d.pop("password", None)
         return d
+
+    def get_inject_sql(self) -> list[str]:
+        """SQL statements to create test table and insert sample data.
+        Override in subclasses for DB-specific syntax."""
+        schema = self.config.schema or self.config.database
+        qualified = f"{schema}.pipeline_events" if schema else "pipeline_events"
+
+        return [
+            f"""CREATE TABLE IF NOT EXISTS {qualified} (
+                pipeline_id VARCHAR(100),
+                pipeline_name VARCHAR(200),
+                status VARCHAR(20),
+                started_at TIMESTAMP,
+                error_message TEXT,
+                rows_processed INT
+            )""",
+            f"""INSERT INTO {qualified} VALUES
+                ('PL-FAIL-001', 'revenue-etl', 'FAILED', CURRENT_TIMESTAMP - INTERVAL '10 minute', 'Connection timeout to upstream service', 0),
+                ('PL-FAIL-002', 'user-sync', 'FAILED', CURRENT_TIMESTAMP - INTERVAL '5 minute', 'NULL constraint violation on user_id', 0),
+                ('PL-FAIL-003', 'order-processing', 'FAILED', CURRENT_TIMESTAMP - INTERVAL '2 minute', 'Disk space exceeded on /data volume', 0),
+                ('PL-STALE-001', 'inventory-sync', 'SUCCESS', CURRENT_TIMESTAMP - INTERVAL '90 minute', NULL, 15234),
+                ('PL-STALE-002', 'analytics-daily', 'SUCCESS', CURRENT_TIMESTAMP - INTERVAL '120 minute', NULL, 89012),
+                ('PL-OK-001', 'email-campaign', 'SUCCESS', CURRENT_TIMESTAMP - INTERVAL '3 minute', NULL, 3456),
+                ('PL-OK-002', 'report-gen', 'SUCCESS', CURRENT_TIMESTAMP - INTERVAL '8 minute', NULL, 7890)""",
+        ]

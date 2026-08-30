@@ -79,10 +79,44 @@ class ClickHouseConnector(DatabaseConnector):
     async def execute_query(self, sql: str) -> list[dict]:
         return await self._query(sql)
 
+    async def execute_non_query(self, sql: str) -> None:
+        """Execute INSERT/CREATE without returning results."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{self._base_url}/",
+                params={"database": self.config.database},
+                content=sql,
+            )
+            if resp.status_code != 200:
+                logger.warning("ClickHouse execute failed: %s", resp.text[:200])
+
     async def count_rows(self, table: str, schema: str | None = None) -> int:
         schema = schema or self.config.database
         result = await self._query_val(f"SELECT COUNT(*) FROM {schema}.{table}")
         return result or 0
+
+    def get_inject_sql(self) -> list[str]:
+        schema = self.config.schema or self.config.database
+        qualified = f"{schema}.pipeline_events"
+
+        return [
+            f"""CREATE TABLE IF NOT EXISTS {qualified} (
+                pipeline_id String,
+                pipeline_name String,
+                status String,
+                started_at DateTime,
+                completed_at Nullable(DateTime),
+                error_message Nullable(String),
+                rows_processed UInt32
+            ) ENGINE = MergeTree() ORDER BY tuple()""",
+            f"INSERT INTO {qualified} SELECT 'PL-FAIL-001', 'revenue-etl', 'FAILED', now() - INTERVAL 10 MINUTE, NULL, 'Connection timeout to upstream service', toUInt32(0)",
+            f"INSERT INTO {qualified} SELECT 'PL-FAIL-002', 'user-sync', 'FAILED', now() - INTERVAL 5 MINUTE, NULL, 'NULL constraint violation on user_id', toUInt32(0)",
+            f"INSERT INTO {qualified} SELECT 'PL-FAIL-003', 'order-processing', 'FAILED', now() - INTERVAL 2 MINUTE, NULL, 'Disk space exceeded on /data volume', toUInt32(0)",
+            f"INSERT INTO {qualified} SELECT 'PL-STALE-001', 'inventory-sync', 'SUCCESS', now() - INTERVAL 90 MINUTE, now() - INTERVAL 89 MINUTE, NULL, toUInt32(15234)",
+            f"INSERT INTO {qualified} SELECT 'PL-STALE-002', 'analytics-daily', 'SUCCESS', now() - INTERVAL 120 MINUTE, now() - INTERVAL 119 MINUTE, NULL, toUInt32(89012)",
+            f"INSERT INTO {qualified} SELECT 'PL-OK-001', 'email-campaign', 'SUCCESS', now() - INTERVAL 3 MINUTE, now() - INTERVAL 2 MINUTE, NULL, toUInt32(3456)",
+            f"INSERT INTO {qualified} SELECT 'PL-OK-002', 'report-gen', 'SUCCESS', now() - INTERVAL 8 MINUTE, now() - INTERVAL 7 MINUTE, NULL, toUInt32(7890)",
+        ]
 
     def build_monitoring_queries(self, mapping: "TableMapping") -> dict[str, str]:
         """ClickHouse-specific SQL syntax."""

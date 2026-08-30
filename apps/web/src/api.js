@@ -56,6 +56,16 @@ export async function getConnector(id) {
   return res.json();
 }
 
+export async function injectTestData(id) {
+  console.log('[API] POST /connectors/' + id + '/inject');
+  const res = await fetch(`${API_BASE}/connectors/${id}/inject`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Inject failed');
+  }
+  return res.json();
+}
+
 export async function fetchStats() {
   console.log('[API] GET /incidents/stats');
   const res = await fetch(`${API_BASE}/incidents/stats`);

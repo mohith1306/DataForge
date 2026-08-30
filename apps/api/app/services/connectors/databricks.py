@@ -134,6 +134,29 @@ class DatabricksConnector(DatabaseConnector):
         result = await self._query_val(f"SELECT COUNT(*) FROM {self.config.database}.{schema}.{table}")
         return result or 0
 
+    def get_inject_sql(self) -> list[str]:
+        schema = self.config.schema or "default"
+        qualified = f"{self.config.database}.{schema}.pipeline_events"
+
+        return [
+            f"""CREATE TABLE IF NOT EXISTS {qualified} (
+                pipeline_id STRING,
+                pipeline_name STRING,
+                status STRING,
+                started_at TIMESTAMP,
+                error_message STRING,
+                rows_processed INT
+            )""",
+            f"""INSERT INTO {qualified} VALUES
+                ('PL-FAIL-001', 'revenue-etl', 'FAILED', CURRENT_TIMESTAMP() - INTERVAL 10 MINUTES, 'Connection timeout to upstream service', 0),
+                ('PL-FAIL-002', 'user-sync', 'FAILED', CURRENT_TIMESTAMP() - INTERVAL 5 MINUTES, 'NULL constraint violation on user_id', 0),
+                ('PL-FAIL-003', 'order-processing', 'FAILED', CURRENT_TIMESTAMP() - INTERVAL 2 MINUTES, 'Disk space exceeded', 0),
+                ('PL-STALE-001', 'inventory-sync', 'SUCCESS', CURRENT_TIMESTAMP() - INTERVAL 90 MINUTES, NULL, 15234),
+                ('PL-STALE-002', 'analytics-daily', 'SUCCESS', CURRENT_TIMESTAMP() - INTERVAL 120 MINUTES, NULL, 89012),
+                ('PL-OK-001', 'email-campaign', 'SUCCESS', CURRENT_TIMESTAMP() - INTERVAL 3 MINUTES, NULL, 3456),
+                ('PL-OK-002', 'report-gen', 'SUCCESS', CURRENT_TIMESTAMP() - INTERVAL 8 MINUTES, NULL, 7890)""",
+        ]
+
     def build_monitoring_queries(self, mapping: "TableMapping") -> dict[str, str]:
         """Databricks SQL syntax (Spark SQL)."""
         if mapping.table_type != "pipeline":

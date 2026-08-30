@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getConnector, runConnectorCheck, testConnector, deleteConnector, fetchIncidents } from '../api';
+import { getConnector, runConnectorCheck, testConnector, deleteConnector, fetchIncidents, injectTestData } from '../api';
 
 const DB_ICONS = { clickhouse: '🏗️', postgres: '🐘', mysql: '🐬', snowflake: '❄️', databricks: '🧱' };
 
@@ -13,6 +13,8 @@ export default function DatabaseDetail() {
   const [checkResult, setCheckResult] = useState(null);
   const [incidents, setIncidents] = useState([]);
   const [tab, setTab] = useState('overview');
+  const [injecting, setInjecting] = useState(false);
+  const [injectResult, setInjectResult] = useState(null);
 
   useEffect(() => { load(); }, [id]);
 
@@ -60,6 +62,20 @@ export default function DatabaseDetail() {
     navigate('/');
   }
 
+  async function handleInject() {
+    setInjecting(true);
+    setInjectResult(null);
+    try {
+      const res = await injectTestData(id);
+      setInjectResult(res);
+      load();
+    } catch (err) {
+      setInjectResult({ error: err.message });
+    } finally {
+      setInjecting(false);
+    }
+  }
+
   if (loading) return <div className="loading">Loading database...</div>;
   if (!connector) return <div className="error">Database not found</div>;
 
@@ -86,6 +102,9 @@ export default function DatabaseDetail() {
           <button className="btn btn-primary" style={{ fontSize: '0.8rem', background: '#f59e0b' }} onClick={handleTest}>Test</button>
           <button className="btn btn-primary" style={{ fontSize: '0.8rem', background: '#8b5cf6' }} onClick={handleRunCheck} disabled={checking}>
             {checking ? 'Checking...' : 'Run Check'}
+          </button>
+          <button className="btn btn-primary" style={{ fontSize: '0.8rem', background: '#06b6d4' }} onClick={handleInject} disabled={injecting}>
+            {injecting ? 'Injecting...' : 'Inject Test Data'}
           </button>
           <button className="btn btn-danger" style={{ fontSize: '0.8rem' }} onClick={handleDelete}>Delete</button>
         </div>
@@ -180,6 +199,19 @@ export default function DatabaseDetail() {
           )}
           {checkResult?.error && (
             <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{checkResult.error}</div>
+          )}
+
+          {/* Inject Result */}
+          {injectResult && !injectResult.error && (
+            <div className="card" style={{ marginBottom: '1.5rem' }}>
+              <div className="card-header">Test Data Injected</div>
+              <div style={{ padding: '0.75rem', background: '#22c55e10', border: '1px solid #22c55e40', borderRadius: '6px', fontSize: '0.85rem', color: '#22c55e' }}>
+                Created pipeline_events table with 7 rows (3 failed, 2 stale, 2 OK)
+              </div>
+            </div>
+          )}
+          {injectResult?.error && (
+            <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{injectResult.error}</div>
           )}
 
           {/* Quick Stats */}
