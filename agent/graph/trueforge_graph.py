@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 TRUEFORGE_ENABLED = os.getenv("TRUEFORGE_ENABLED", "false").lower() == "true"
 TRUEFORGE_URL = os.getenv("TRUEFORGE_URL", "http://localhost:8790")
+MODEL_NAME = os.getenv("MODEL_NAME", "google/gemini-3.1-flash-lite")
 
 _runtime: TrueForgeRuntime | None = None
 
@@ -28,7 +29,7 @@ def get_runtime() -> TrueForgeRuntime | None:
     if not TRUEFORGE_ENABLED:
         return None
     if _runtime is None:
-        _runtime = TrueForgeRuntime(base_url=TRUEFORGE_URL)
+        _runtime = TrueForgeRuntime(base_url=TRUEFORGE_URL, model_name=MODEL_NAME)
     return _runtime
 
 

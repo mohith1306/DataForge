@@ -39,7 +39,10 @@ DATAFORGE_ENV = os.getenv("DATAFORGE_ENV", "demo")
 
 WRITE_TOOLS = {"rerun_pipeline", "rollback_deployment", "create_incident_ticket"}
 
-IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+# Max characters per tool response to prevent context overflow
+MAX_RESPONSE_CHARS = 2000
+
+IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_-]*$")
 
 app = FastAPI(title="DataForge MCP Server")
 
@@ -80,12 +83,12 @@ def _get_github_headers() -> dict:
 TOOLS = [
     {
         "name": "list_tables",
-        "description": "List all tables in the dataforge database",
+        "description": "List all tables in the database",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "describe_table",
-        "description": "Get the schema of a table",
+        "description": "Get the schema and columns of a table",
         "inputSchema": {
             "type": "object",
             "properties": {"table": {"type": "string", "description": "Table name"}},
@@ -94,7 +97,7 @@ TOOLS = [
     },
     {
         "name": "execute_select",
-        "description": "Execute a read-only SELECT query",
+        "description": "Execute a read-only SELECT query on the database",
         "inputSchema": {
             "type": "object",
             "properties": {"query": {"type": "string", "description": "SQL SELECT query"}},
@@ -102,115 +105,30 @@ TOOLS = [
         },
     },
     {
-        "name": "profile_column",
-        "description": "Get column statistics: null rate, distinct count, min, max",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "table": {"type": "string"},
-                "column": {"type": "string"},
-            },
-            "required": ["table", "column"],
-        },
-    },
-    {
         "name": "get_pipeline_status",
-        "description": "Get current status of pipelines",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "pipeline_id": {"type": "string", "description": "Optional pipeline ID"},
-            },
-        },
+        "description": "Get status of all data pipelines. No args needed.",
+        "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "get_pipeline_logs",
-        "description": "Get error logs for a pipeline",
+        "description": "Get error logs for a specific pipeline",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "pipeline_id": {"type": "string"},
-                "limit": {"type": "integer", "default": 50},
+                "pipeline_id": {"type": "string", "description": "Pipeline ID"},
             },
             "required": ["pipeline_id"],
-        },
-    },
-    {
-        "name": "get_failed_jobs",
-        "description": "Get all failed pipeline jobs in the last N days",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"days": {"type": "integer", "default": 7}},
         },
     },
     {
         "name": "get_recent_commits",
-        "description": "Get recent commits from the repository",
+        "description": "Get recent git commits from the repository",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "branch": {"type": "string", "default": "main"},
-                "limit": {"type": "integer", "default": 20},
-            },
-        },
-    },
-    {
-        "name": "search_commits",
-        "description": "Search commits by message keyword",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "keyword": {"type": "string"},
                 "limit": {"type": "integer", "default": 10},
             },
-            "required": ["keyword"],
         },
-    },
-    {
-        "name": "get_pull_requests",
-        "description": "Get pull requests",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "state": {"type": "string", "default": "all"},
-                "limit": {"type": "integer", "default": 20},
-            },
-        },
-    },
-    {
-        "name": "get_changed_files",
-        "description": "Get files changed in a pull request",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "pr_number": {"type": "integer", "description": "PR number"},
-            },
-            "required": ["pr_number"],
-        },
-    },
-    {
-        "name": "rerun_pipeline",
-        "description": "Re-run a pipeline (requires approval)",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"pipeline_id": {"type": "string"}},
-            "required": ["pipeline_id"],
-        },
-    },
-    {
-        "name": "rollback_deployment",
-        "description": "Rollback a deployment (requires approval)",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "deployment_id": {"type": "string", "default": "v2.8.0"},
-            },
-        },
-    },
-    {
-        "name": "validate_data_quality",
-        "description": "Run data quality validation checks",
-        "inputSchema": {"type": "object", "properties": {}},
     },
 ]
 
@@ -223,12 +141,28 @@ async def execute_tool(name: str, args: dict) -> Any:
         return [{"name": row.get("name", "")} for row in rows]
 
     elif name == "describe_table":
-        tbl = _validate_identifier(args["table"])
-        rows = await _query(f"DESCRIBE TABLE {CLICKHOUSE_DB}.{tbl}")
+        tbl_name = args.get("table") or args.get("table_name") or args.get("name")
+        if not tbl_name:
+            available = [r.get("name", "") for r in await _query(f"SHOW TABLES FROM {CLICKHOUSE_DB}")]
+            raise ValueError(
+                f"Missing required parameter 'table'. "
+                f"Available tables in {CLICKHOUSE_DB}: {available}"
+            )
+        tbl = _validate_identifier(tbl_name)
+        try:
+            rows = await _query(f"DESCRIBE TABLE {CLICKHOUSE_DB}.{tbl}")
+        except RuntimeError as e:
+            available = [r.get("name", "") for r in await _query(f"SHOW TABLES FROM {CLICKHOUSE_DB}")]
+            raise ValueError(
+                f"Table '{tbl}' not found in {CLICKHOUSE_DB}. "
+                f"Available tables: {available}"
+            ) from e
         return {"table": tbl, "columns": rows}
 
     elif name == "execute_select":
-        q = args["query"].strip()
+        q = (args.get("query") or args.get("sql") or "").strip()
+        if not q:
+            raise ValueError("Missing required parameter 'query'")
         if not q.upper().startswith("SELECT"):
             raise ValueError("Only SELECT queries are allowed")
         if "LIMIT" not in q.upper():
@@ -236,8 +170,12 @@ async def execute_tool(name: str, args: dict) -> Any:
         return await _query(q)
 
     elif name == "profile_column":
-        tbl = _validate_identifier(args["table"])
-        col = _validate_identifier(args["column"])
+        tbl_name = args.get("table") or args.get("table_name") or ""
+        col_name = args.get("column") or args.get("column_name") or ""
+        if not tbl_name or not col_name:
+            raise ValueError(f"Missing required parameters. Got table={tbl_name!r}, column={col_name!r}")
+        tbl = _validate_identifier(tbl_name)
+        col = _validate_identifier(col_name)
         sql = (
             f"SELECT count() as total_rows, countIf({col} IS NULL) as null_count, "
             f"round(countIf({col} IS NULL) / count(), 4) as null_rate, "
@@ -252,27 +190,30 @@ async def execute_tool(name: str, args: dict) -> Any:
     elif name == "get_pipeline_status":
         pid = args.get("pipeline_id")
         if pid:
+            pid_clean = _validate_identifier(pid)
             sql = (
                 f"SELECT pipeline_id, pipeline_name, status, "
                 f"started_at, completed_at, error_message, "
                 f"rows_processed FROM {CLICKHOUSE_DB}.pipeline_events "
-                f"WHERE pipeline_id = '{_validate_identifier(pid)}' "
+                f"WHERE pipeline_id = '{pid_clean}' "
                 f"ORDER BY started_at DESC LIMIT 1"
             )
         else:
             sql = (
-                f"SELECT pipeline_id, argMax(pipeline_name, started_at) as pipeline_name, "
-                f"argMax(status, started_at) as status, "
-                f"argMax(started_at, started_at) as started_at, "
-                f"argMax(error_message, started_at) as error_message "
+                f"SELECT pipeline_id, pipeline_name, status, started_at, error_message "
                 f"FROM {CLICKHOUSE_DB}.pipeline_events "
-                f"GROUP BY pipeline_id ORDER BY started_at DESC"
+                f"WHERE (pipeline_id, started_at) IN "
+                f"(SELECT pipeline_id, max(started_at) FROM {CLICKHOUSE_DB}.pipeline_events GROUP BY pipeline_id) "
+                f"ORDER BY started_at DESC"
             )
         rows = await _query(sql)
         return {"pipelines": rows, "count": len(rows)}
 
     elif name == "get_pipeline_logs":
-        pid = _validate_identifier(args["pipeline_id"])
+        pid_val = args.get("pipeline_id") or args.get("pipeline") or ""
+        if not pid_val:
+            raise ValueError("Missing required parameter 'pipeline_id'")
+        pid = _validate_identifier(pid_val)
         limit = args.get("limit", 50)
         sql = (
             f"SELECT pipeline_id, pipeline_name, status, started_at, error_message "
@@ -316,7 +257,9 @@ async def execute_tool(name: str, args: dict) -> Any:
             return {"commits": commits, "count": len(commits)}
 
     elif name == "search_commits":
-        keyword = args["keyword"]
+        keyword = args.get("keyword") or args.get("query") or args.get("search") or ""
+        if not keyword:
+            raise ValueError("Missing required parameter 'keyword'")
         limit = args.get("limit", 10)
         url = f"{GITHUB_API}/repos/{REPO}/commits"
         async with httpx.AsyncClient(timeout=30) as client:
@@ -359,7 +302,13 @@ async def execute_tool(name: str, args: dict) -> Any:
             return {"pull_requests": prs, "count": len(prs)}
 
     elif name == "get_changed_files":
-        pr_number = args["pr_number"]
+        pr_val = args.get("pr_number") or args.get("pr") or args.get("pull_request") or ""
+        if not pr_val:
+            raise ValueError("Missing required parameter 'pr_number'")
+        try:
+            pr_number = int(pr_val)
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid pr_number: {pr_val!r}")
         url = f"{GITHUB_API}/repos/{REPO}/pulls/{pr_number}/files"
         all_files = []
         page = 1
@@ -395,7 +344,10 @@ async def execute_tool(name: str, args: dict) -> Any:
         }
 
     elif name == "rerun_pipeline":
-        pid = _validate_identifier(args["pipeline_id"])
+        pid_val = args.get("pipeline_id") or args.get("pipeline") or ""
+        if not pid_val:
+            raise ValueError("Missing required parameter 'pipeline_id'")
+        pid = _validate_identifier(pid_val)
         # Gap 9: Demo mode — simulate without real mutation
         if DATAFORGE_ENV == "demo":
             return {
@@ -520,6 +472,14 @@ async def messages_endpoint(request: Request):
     method = body.get("method")
     req_id = body.get("id")
 
+    # Notifications (no id) don't require a response per JSON-RPC spec
+    if req_id is None and method in ("notifications/initialized",):
+        return Response(status_code=202)
+
+    # Ensure req_id is always valid (MCP SDK requires string|number, not null)
+    if req_id is None:
+        req_id = 0
+
     if method == "initialize":
         result = {
             "protocolVersion": "2024-11-05",
@@ -563,11 +523,14 @@ async def messages_endpoint(request: Request):
 
         try:
             result = await execute_tool(tool_name, tool_args)
+            text = json.dumps(result, default=str)
+            if len(text) > MAX_RESPONSE_CHARS:
+                text = text[:MAX_RESPONSE_CHARS] + f"\n... [truncated, {len(text)} total chars]"
             await queue.put({
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
-                    "content": [{"type": "text", "text": json.dumps(result, default=str)}]
+                    "content": [{"type": "text", "text": text}]
                 },
             })
         except Exception as e:

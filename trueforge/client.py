@@ -90,6 +90,18 @@ class TrueForgeClient:
                 raise TrueForgeError(f"Get agent failed: {resp.status_code} {resp.text}")
             return resp.json()
 
+    async def update_agent(self, agent_id: str, payload: dict) -> dict:
+        """Update an existing agent's manifest."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.put(
+                f"{self.base_url}/api/v1/agents/{agent_id}",
+                headers=self._headers(),
+                json=payload,
+            )
+            if resp.status_code != 200:
+                raise TrueForgeError(f"Update agent failed: {resp.status_code} {resp.text}")
+            return resp.json()
+
     # ─── Sessions ────────────────────────────────────────────────────────────
 
     async def create_session(
@@ -150,19 +162,41 @@ class TrueForgeClient:
         session_id: str,
         message: str,
     ) -> dict:
-        """Create a new turn in a session (non-streaming)."""
+        """Create a new turn in a session (non-blocking).
+
+        Sends the turn creation request and returns immediately with the turn_id
+        without waiting for the LLM to complete processing.
+        """
         payload = {
             "input": [{"type": "user.message", "content": message}],
+            "stream": True,
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            async with client.stream(
+                "POST",
                 f"{self.base_url}/api/v1/sessions/{session_id}/turns",
                 headers=self._headers(),
                 json=payload,
-            )
-            if resp.status_code not in (200, 201):
-                raise TrueForgeError(f"Create turn failed: {resp.status_code} {resp.text}")
-            return resp.json()
+            ) as resp:
+                if resp.status_code not in (200, 201):
+                    text = ""
+                    async for chunk in resp.aiter_text():
+                        text += chunk
+                    raise TrueForgeError(f"Create turn failed: {resp.status_code} {text}")
+
+                # Read SSE events to find turn.created
+                turn_id = None
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: "):
+                        try:
+                            data = json.loads(line[6:])
+                            if data.get("type") == "turn.created":
+                                turn_id = data.get("turn_id") or data.get("id")
+                                return {"id": turn_id, "status": "started"}
+                        except json.JSONDecodeError:
+                            continue
+
+                return {"id": turn_id, "status": "started"}
 
     async def create_turn_stream(
         self,
@@ -194,6 +228,17 @@ class TrueForgeClient:
                                 yield event
                             except json.JSONDecodeError:
                                 logger.warning(f"Failed to parse SSE event: {data}")
+
+    async def list_turns(self, session_id: str) -> list[dict]:
+        """List all turns for a session."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/api/v1/sessions/{session_id}/turns",
+                headers=self._headers(),
+            )
+            if resp.status_code != 200:
+                raise TrueForgeError(f"List turns failed: {resp.status_code} {resp.text}")
+            return resp.json().get("data", [])
 
     async def get_turn(self, session_id: str, turn_id: str) -> dict:
         """Get turn by ID."""

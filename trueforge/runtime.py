@@ -7,9 +7,11 @@ Provides:
 - Approval handling
 """
 
+import asyncio
+import json
 import logging
 
-from trueforge.agents import DATAFORGE_INVESTIGATOR_SPEC
+from trueforge.agents import get_investigator_spec
 from trueforge.client import TrueForgeClient, TrueForgeError
 
 logger = logging.getLogger(__name__)
@@ -18,14 +20,23 @@ logger = logging.getLogger(__name__)
 class TrueForgeRuntime:
     """Manages TrueForge integration for DataForge incidents."""
 
-    def __init__(self, base_url: str = "http://localhost:8790", token: str | None = None):
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8790",
+        token: str | None = None,
+        model_name: str = "google/gemini-2.0-flash",
+    ):
         self.client = TrueForgeClient(base_url=base_url, token=token)
         self._agent_id: str | None = None
+        self._model_name = model_name
 
     async def ensure_agent(self) -> str:
-        """Ensure the DataForge investigator agent exists, return its ID."""
-        if self._agent_id:
-            return self._agent_id
+        """Ensure the DataForge investigator agent exists, return its ID.
+
+        If an existing agent is found, updates its manifest to match the
+        current spec (model, instructions, MCP servers, iteration limit).
+        """
+        desired_spec = get_investigator_spec(self._model_name)
 
         try:
             agents = await self.client.list_agents()
@@ -33,6 +44,15 @@ class TrueForgeRuntime:
                 if agent.get("name") == "dataforge-investigator":
                     self._agent_id = agent["id"]
                     logger.info(f"Found existing agent: {self._agent_id}")
+                    # Update manifest to ensure it matches current spec
+                    try:
+                        await self.client.update_agent(
+                            self._agent_id,
+                            {"manifest": desired_spec},
+                        )
+                        logger.info("Updated existing agent manifest")
+                    except TrueForgeError as e:
+                        logger.warning(f"Could not update agent manifest: {e}")
                     return self._agent_id
         except TrueForgeError as e:
             logger.warning(f"Could not list agents: {e}")
@@ -41,7 +61,7 @@ class TrueForgeRuntime:
         try:
             payload = {
                 "name": "dataforge-investigator",
-                "manifest": DATAFORGE_INVESTIGATOR_SPEC,
+                "manifest": desired_spec,
             }
             result = await self.client.create_agent(payload)
             self._agent_id = result.get("id")
@@ -51,49 +71,124 @@ class TrueForgeRuntime:
             logger.error(f"Failed to create agent: {e}")
             raise
 
+    async def _prefetch_data(self, description: str) -> str:
+        """Pre-fetch pipeline data from ClickHouse for the investigation."""
+        import httpx
+        import os
+
+        ch_host = os.getenv("CLICKHOUSE_HOST", "localhost")
+        ch_port = os.getenv("CLICKHOUSE_PORT", "8123")
+        ch_db = os.getenv("CLICKHOUSE_DATABASE", "dataforge")
+        base_url = f"http://{ch_host}:{ch_port}"
+
+        sections = []
+
+        # 1. Pipeline status
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{base_url}/",
+                    params={"database": ch_db, "query_format": "JSONEachRow"},
+                    content="SELECT pipeline_id, pipeline_name, status, started_at, finished_at, rows_processed, error_message FROM dataforge.pipeline_runs ORDER BY started_at DESC LIMIT 20",
+                )
+                rows = [json.loads(line) for line in resp.text.strip().split("\n") if line]
+                sections.append("### Pipeline Status (recent runs)")
+                for r in rows:
+                    sections.append(
+                        f"- {r.get('pipeline_name','?')} ({r.get('pipeline_id','?')}): "
+                        f"{r.get('status','?')} | started: {r.get('started_at','?')} | "
+                        f"rows: {r.get('rows_processed',0)} | error: {str(r.get('error_message',''))[:200]}"
+                    )
+        except Exception as e:
+            sections.append(f"### Pipeline Status\nError fetching: {e}")
+
+        # 2. Data freshness
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{base_url}/",
+                    params={"database": ch_db, "query_format": "JSONEachRow"},
+                    content="SELECT pipeline_id, pipeline_name, last_successful_run, freshness_threshold_minutes FROM dataforge.pipeline_freshness ORDER BY last_successful_run ASC LIMIT 10",
+                )
+                rows = [json.loads(line) for line in resp.text.strip().split("\n") if line]
+                sections.append("\n### Data Freshness")
+                for r in rows:
+                    sections.append(
+                        f"- {r.get('pipeline_name','?')} ({r.get('pipeline_id','?')}): "
+                        f"last run: {r.get('last_successful_run','?')} | "
+                        f"threshold: {r.get('freshness_threshold_minutes',0)} min"
+                    )
+        except Exception as e:
+            sections.append(f"\n### Data Freshness\nError fetching: {e}")
+
+        # 3. Data quality checks
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{base_url}/",
+                    params={"database": ch_db, "query_format": "JSONEachRow"},
+                    content="SELECT check_name, status, failed_records, total_records, severity FROM dataforge.data_quality_checks WHERE status = 'FAIL' ORDER BY severity DESC LIMIT 10",
+                )
+                rows = [json.loads(line) for line in resp.text.strip().split("\n") if line]
+                if rows:
+                    sections.append("\n### Failed Data Quality Checks")
+                    for r in rows:
+                        sections.append(
+                            f"- {r.get('check_name','?')}: {r.get('status','?')} | "
+                            f"failed: {r.get('failed_records',0)}/{r.get('total_records',0)} | "
+                            f"severity: {r.get('severity','?')}"
+                        )
+                else:
+                    sections.append("\n### Data Quality Checks\nNo failed checks.")
+        except Exception as e:
+            sections.append(f"\n### Data Quality Checks\nError fetching: {e}")
+
+        # 4. Recent commits
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "log", "--oneline", "-5", "--format=%h %s (%ai)"],
+                capture_output=True, text=True, timeout=5,
+                cwd=os.getenv("GITHUB_REPO_PATH", "."),
+            )
+            commits = result.stdout.strip()
+            sections.append(f"\n### Recent Git Commits\n{commits}" if commits else "\n### Recent Git Commits\nNo commits found.")
+        except Exception as e:
+            sections.append(f"\n### Recent Git Commits\nError: {e}")
+
+        return "\n".join(sections)
+
     async def start_investigation(
         self,
         incident_id: str,
         incident_type: str,
         description: str,
     ) -> dict:
-        """Start a TrueForge investigation session for an incident."""
+        """Start a TrueForge investigation session for an incident.
+
+        Pre-fetches data from ClickHouse so the LLM just needs to analyze,
+        not call tools (avoids Gemini tool-calling loop issues).
+        """
         await self.ensure_agent()
+
+        # Pre-fetch data from ClickHouse
+        prefetched = await self._prefetch_data(description)
 
         message = (
             f"## Data Quality Incident\n\n"
             f"Incident ID: {incident_id}\n"
             f"Type: {incident_type}\n"
             f"Description: {description}\n\n"
-            f"## Investigation Instructions\n\n"
-            f"Follow the DataOps investigation methodology:\n\n"
-            f"1. **Database Investigation**: Use `list_tables`, "
-            f"`describe_table`, `execute_select`, and `profile_column` "
-            f"to inspect data quality in ClickHouse.\n"
-            f"2. **Pipeline Investigation**: Use `get_pipeline_status`, "
-            f"`get_pipeline_logs`, and `get_failed_jobs` "
-            f"to check pipeline health.\n"
-            f"3. **GitHub Investigation**: Use `get_recent_commits` "
-            f"and `search_commits` "
-            f"to correlate code changes with the incident.\n"
-            f"4. **Evidence Collection**: "
-            f"Collect structured evidence from each investigation source.\n"
-            f"5. **Root Cause Analysis**: "
-            f"Correlate all evidence to identify the root cause "
-            f"with confidence level.\n"
-            f"6. **Remediation Plan**: "
-            f"Generate a remediation plan with risk assessment.\n"
-            f"7. **Verification**: "
-            f"After remediation, verify the fix worked.\n\n"
-            f"**Rules:**\n"
-            f"- Investigation tools are READ-ONLY "
-            f"— never modify data during investigation\n"
-            f"- Use the sandbox for numerical/statistical analysis\n"
-            f"- High-risk actions (rerun_pipeline, rollback_deployment) "
-            f"require human approval\n"
-            f"- Always verify remediation after execution\n"
-            f"- Distinguish evidence (facts) from hypotheses "
-            f"(interpretations)\n"
+            f"## Pre-fetched Data\n\n"
+            f"{prefetched}\n\n"
+            f"## Task\n\n"
+            f"Analyze the above data and write your investigation report.\n"
+            f"Do NOT call any tools — all data is provided above.\n\n"
+            f"## Response Format\n\n"
+            f"ROOT CAUSE: [describe the root cause]\n"
+            f"CONFIDENCE: [high/medium/low]\n"
+            f"EVIDENCE: [list the evidence]\n"
+            f"REMEDIATION PLAN: [describe how to fix]"
         )
 
         try:
@@ -107,9 +202,15 @@ class TrueForgeRuntime:
                 message=message,
             )
 
+            turn_id = turn.get("id")
+            if not turn_id:
+                turns = await self.client.list_turns(session_id)
+                if turns:
+                    turn_id = turns[-1].get("id")
+
             return {
                 "session_id": session_id,
-                "turn_id": turn.get("id"),
+                "turn_id": turn_id,
                 "status": "started",
             }
         except TrueForgeError as e:
