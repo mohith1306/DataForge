@@ -1,5 +1,54 @@
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
+// ── Connector API ────────────────────────────────────────────────────────────
+
+export async function listConnectors() {
+  console.log('[API] GET /connectors');
+  const res = await fetch(`${API_BASE}/connectors`);
+  console.log('[API] Response:', res.status);
+  if (!res.ok) throw new Error('Failed to fetch connectors');
+  return res.json();
+}
+
+export async function addConnector(data) {
+  console.log('[API] POST /connectors', data.name, data.db_type);
+  const res = await fetch(`${API_BASE}/connectors`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  console.log('[API] Response:', res.status);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Connection failed');
+  }
+  return res.json();
+}
+
+export async function deleteConnector(id) {
+  console.log('[API] DELETE /connectors/' + id);
+  const res = await fetch(`${API_BASE}/connectors/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete connector');
+  return res.json();
+}
+
+export async function testConnector(id) {
+  console.log('[API] POST /connectors/' + id + '/test');
+  const res = await fetch(`${API_BASE}/connectors/${id}/test`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Test failed');
+  }
+  return res.json();
+}
+
+export async function runConnectorCheck(id) {
+  console.log('[API] POST /connectors/' + id + '/check');
+  const res = await fetch(`${API_BASE}/connectors/${id}/check`, { method: 'POST' });
+  if (!res.ok) throw new Error('Check failed');
+  return res.json();
+}
+
 export async function fetchStats() {
   console.log('[API] GET /incidents/stats');
   const res = await fetch(`${API_BASE}/incidents/stats`);

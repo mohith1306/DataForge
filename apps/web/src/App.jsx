@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-do
 import Dashboard from './pages/Dashboard';
 import IncidentDetail from './pages/IncidentDetail';
 import ChaosLab from './pages/ChaosLab';
+import Connectors from './pages/Connectors';
 
 function NavLink({ to, children }) {
   const location = useLocation();
@@ -22,12 +23,14 @@ export default function App() {
             ⚡ DataForge
           </Link>
           <div className="nav-links">
-            <NavLink to="/">Dashboard</NavLink>
+            <NavLink to="/">Databases</NavLink>
+            <NavLink to="/dashboard">Dashboard</NavLink>
             <NavLink to="/chaos">Chaos Lab</NavLink>
           </div>
         </nav>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Connectors />} />
+          <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/incidents/:id" element={<IncidentDetail />} />
           <Route path="/chaos" element={<ChaosLab />} />
         </Routes>
