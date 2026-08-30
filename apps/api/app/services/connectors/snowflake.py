@@ -1,0 +1,170 @@
+"""Snowflake database connector with auto-discovery."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from apps.api.app.services.connectors.base import DatabaseConnector, ConnectorConfig
+
+logger = logging.getLogger(__name__)
+
+
+class SnowflakeConnector(DatabaseConnector):
+    """Snowflake connector using snowflake-connector-python async wrapper."""
+
+    def __init__(self, config: ConnectorConfig):
+        super().__init__(config)
+        self._connection = None
+
+    async def connect(self) -> bool:
+        try:
+            import snowflake.connector
+
+            # Strip .snowflakecomputing.com from account if user provided full URL
+            account = self.config.host
+            if ".snowflakecomputing.com" in account:
+                account = account.split(".snowflakecomputing.com")[0]
+
+            self._connection = snowflake.connector.connect(
+                account=account,
+                user=self.config.username,
+                password=self.config.password,
+                database=self.config.database,
+                schema=self.config.schema or "PUBLIC",
+                warehouse=self.config.extra.get("warehouse", "COMPUTE_WH"),
+                role=self.config.extra.get("role", "SYSADMIN"),
+                login_timeout=15,
+            )
+            # Test
+            cursor = self._connection.cursor()
+            cursor.execute("SELECT 1")
+            cursor.close()
+            logger.info("Connected to Snowflake: %s/%s", self.config.host, self.config.database)
+            return True
+        except ImportError as e:
+            msg = "snowflake-connector-python not installed. Run: pip install snowflake-connector-python"
+            logger.error(msg)
+            self._last_error = msg
+            return False
+        except Exception as e:
+            msg = f"{type(e).__name__}: {e}"
+            logger.error("Snowflake connection failed: %s", msg)
+            self._last_error = msg
+            return False
+
+    async def disconnect(self) -> None:
+        if self._connection:
+            self._connection.close()
+            self._connection = None
+
+    def _execute_sync(self, sql: str) -> list[dict]:
+        if not self._connection:
+            raise RuntimeError("Not connected")
+        cursor = self._connection.cursor()
+        cursor.execute(sql)
+        columns = [desc[0].lower() for desc in cursor.description] if cursor.description else []
+        rows = cursor.fetchall()
+        cursor.close()
+        return [dict(zip(columns, row)) for row in rows]
+
+    def _execute_val_sync(self, sql: str) -> Any:
+        rows = self._execute_sync(sql)
+        if rows:
+            return list(rows[0].values())[0]
+        return None
+
+    async def execute_non_query(self, sql: str) -> None:
+        """Execute INSERT/CREATE without returning results."""
+        if not self._connection:
+            raise RuntimeError("Not connected")
+        cursor = self._connection.cursor()
+        try:
+            cursor.execute(sql)
+        finally:
+            cursor.close()
+
+    async def list_tables(self, schema: str | None = None) -> list[str]:
+        schema = schema or self.config.schema or "PUBLIC"
+        try:
+            rows = self._execute_sync(
+                f"SHOW TABLES IN SCHEMA {self.config.database}.{schema}"
+            )
+            return [r.get("name", r.get("Name", "")) for r in rows]
+        except Exception as e:
+            # Schema might not exist or no tables — try listing all tables in database
+            logger.warning("SHOW TABLES IN SCHEMA failed: %s, trying DATABASE level", e)
+            try:
+                rows = self._execute_sync(
+                    f"SHOW TABLES IN DATABASE {self.config.database}"
+                )
+                return [r.get("name", r.get("Name", "")) for r in rows]
+            except Exception as e2:
+                logger.warning("SHOW TABLES IN DATABASE also failed: %s", e2)
+                return []
+
+    async def describe_table(self, table: str, schema: str | None = None) -> list[dict]:
+        schema = schema or self.config.schema or "PUBLIC"
+        rows = self._execute_sync(
+            f"DESCRIBE TABLE {self.config.database}.{schema}.{table}"
+        )
+        # Snowflake DESCRIBE returns 'name', 'type', etc.
+        return [{"name": r.get("name", ""), "type": r.get("type", ""), "nullable": "Y" in str(r.get("null?", ""))} for r in rows]
+
+    async def execute_query(self, sql: str) -> list[dict]:
+        return self._execute_sync(sql)
+
+    async def count_rows(self, table: str, schema: str | None = None) -> int:
+        schema = schema or self.config.schema or "PUBLIC"
+        return self._execute_val_sync(f"SELECT COUNT(*) FROM {self.config.database}.{schema}.{table}") or 0
+
+    def get_inject_sql(self) -> list[str]:
+        schema = self.config.schema or "PUBLIC"
+        qualified = f"{self.config.database}.{schema}.pipeline_events"
+
+        return [
+            # Create schema and database if needed (ignore errors if they exist)
+            f"CREATE DATABASE IF NOT EXISTS {self.config.database}",
+            f"CREATE SCHEMA IF NOT EXISTS {self.config.database}.{schema}",
+            f"""CREATE TABLE IF NOT EXISTS {qualified} (
+                pipeline_id VARCHAR(100),
+                pipeline_name VARCHAR(200),
+                status VARCHAR(20),
+                started_at TIMESTAMP_NTZ,
+                error_message TEXT,
+                rows_processed INT
+            )""",
+            f"INSERT INTO {qualified} SELECT 'PL-FAIL-001', 'revenue-etl', 'FAILED', DATEADD(minute, -10, CURRENT_TIMESTAMP()), 'Connection timeout to upstream service', 0",
+            f"INSERT INTO {qualified} SELECT 'PL-FAIL-002', 'user-sync', 'FAILED', DATEADD(minute, -5, CURRENT_TIMESTAMP()), 'NULL constraint violation on user_id', 0",
+            f"INSERT INTO {qualified} SELECT 'PL-FAIL-003', 'order-processing', 'FAILED', DATEADD(minute, -2, CURRENT_TIMESTAMP()), 'Disk space exceeded', 0",
+            f"INSERT INTO {qualified} SELECT 'PL-STALE-001', 'inventory-sync', 'SUCCESS', DATEADD(minute, -90, CURRENT_TIMESTAMP()), NULL, 15234",
+            f"INSERT INTO {qualified} SELECT 'PL-STALE-002', 'analytics-daily', 'SUCCESS', DATEADD(minute, -120, CURRENT_TIMESTAMP()), NULL, 89012",
+            f"INSERT INTO {qualified} SELECT 'PL-OK-001', 'email-campaign', 'SUCCESS', DATEADD(minute, -3, CURRENT_TIMESTAMP()), NULL, 3456",
+            f"INSERT INTO {qualified} SELECT 'PL-OK-002', 'report-gen', 'SUCCESS', DATEADD(minute, -8, CURRENT_TIMESTAMP()), NULL, 7890",
+        ]
+
+    def build_monitoring_queries(self, mapping: "TableMapping") -> dict[str, str]:
+        """Snowflake-specific SQL syntax."""
+        if mapping.table_type != "pipeline":
+            return super().build_monitoring_queries(mapping)
+
+        c = mapping.columns
+        table = mapping.table_name
+        schema = self.config.schema or "PUBLIC"
+        qualified = f"{self.config.database}.{schema}.{table}"
+        failed_vals = "','".join(self.STATUS_FAILED_VALUES)
+
+        return {
+            "pipeline_failures": f"""
+SELECT {c.get('pipeline_id','id')}, {c.get('pipeline_name','name')}, {c.get('status','status')}, {c.get('started_at','started_at')}, {c.get('error_message','error_message')}
+FROM {qualified}
+WHERE {c.get('status','status')} IN ('{failed_vals}')
+AND {c.get('started_at','started_at')} >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
+ORDER BY {c.get('started_at','started_at')} DESC LIMIT 20""",
+            "pipeline_freshness": f"""
+SELECT {c.get('pipeline_id','id')}, {c.get('pipeline_name','name')}, MAX({c.get('started_at','started_at')}) as last_run
+FROM {qualified}
+GROUP BY {c.get('pipeline_id','id')}, {c.get('pipeline_name','name')}
+HAVING MAX({c.get('started_at','started_at')}) < DATEADD(hour, -1, CURRENT_TIMESTAMP())
+ORDER BY last_run ASC""",
+        }

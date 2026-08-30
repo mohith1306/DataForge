@@ -18,6 +18,7 @@ class IncidentResponse(BaseModel):
     severity: str
     status: str
     incident_type: str | None
+    connector_id: str | None
     trueforge_session_id: str | None
     verification_result: str | None
     created_at: datetime

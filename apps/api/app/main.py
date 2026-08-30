@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.app.api.chaos import router as chaos_router
+from apps.api.app.api.connectors import router as connectors_router
+from apps.api.app.api.database import router as database_router
 from apps.api.app.api.events import router as events_router
 from apps.api.app.api.health import router as health_router
 from apps.api.app.api.incidents import router as incidents_router
@@ -22,8 +24,18 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     # Auto-start background monitor
     from apps.api.app.services import monitor
     monitor.start(interval=30)
+
+    # Auto-start monitoring for all enabled connectors
+    from apps.api.app.services.connectors.registry import registry
+    for conn in registry.list_connectors():
+        if conn.get("enabled"):
+            await registry.start_monitoring(conn["id"])
+
     yield
     monitor.stop()
+    # Stop all connector monitoring
+    for conn in registry.list_connectors():
+        await registry.stop_monitoring(conn["id"])
 
 
 app = FastAPI(
@@ -47,6 +59,8 @@ app.include_router(events_router, prefix="/api")
 app.include_router(stream_router, prefix="/api")
 app.include_router(chaos_router, prefix="/api")
 app.include_router(monitor_router, prefix="/api")
+app.include_router(database_router, prefix="/api")
+app.include_router(connectors_router, prefix="/api")
 
 
 @app.get("/")

@@ -81,6 +81,7 @@ def _get_github_headers() -> dict:
 # ─── Tool Definitions ─────────────────────────────────────────────────────────
 
 TOOLS = [
+    # Database tools
     {
         "name": "list_tables",
         "description": "List all tables in the database",
@@ -105,6 +106,19 @@ TOOLS = [
         },
     },
     {
+        "name": "profile_column",
+        "description": "Get column statistics: null rate, distinct count, min/max values",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "table": {"type": "string", "description": "Table name"},
+                "column": {"type": "string", "description": "Column name"},
+            },
+            "required": ["table", "column"],
+        },
+    },
+    # Pipeline tools
+    {
         "name": "get_pipeline_status",
         "description": "Get status of all data pipelines. No args needed.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -121,12 +135,88 @@ TOOLS = [
         },
     },
     {
+        "name": "get_failed_jobs",
+        "description": "Get all failed pipeline jobs in the last N days",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "default": 7, "description": "Number of days to look back"},
+            },
+        },
+    },
+    # GitHub tools
+    {
         "name": "get_recent_commits",
         "description": "Get recent git commits from the repository",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "limit": {"type": "integer", "default": 10},
+            },
+        },
+    },
+    {
+        "name": "search_commits",
+        "description": "Search commits by keyword in message",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "Search keyword"},
+            },
+            "required": ["keyword"],
+        },
+    },
+    {
+        "name": "get_pull_requests",
+        "description": "List pull requests with state filter",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "state": {"type": "string", "enum": ["open", "closed", "all"], "default": "all"},
+                "limit": {"type": "integer", "default": 20},
+            },
+        },
+    },
+    {
+        "name": "get_changed_files",
+        "description": "Get files changed in a pull request",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr_number": {"type": "integer", "description": "PR number"},
+            },
+            "required": ["pr_number"],
+        },
+    },
+    # Remediation tools (require approval)
+    {
+        "name": "rerun_pipeline",
+        "description": "Trigger a pipeline rerun via Airflow or simulate in demo mode",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pipeline_id": {"type": "string", "description": "Pipeline ID to rerun"},
+            },
+            "required": ["pipeline_id"],
+        },
+    },
+    {
+        "name": "rollback_deployment",
+        "description": "Rollback a deployment to a previous version (REQUIRES APPROVAL)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "deployment_id": {"type": "string", "description": "Target deployment version"},
+            },
+        },
+    },
+    {
+        "name": "validate_data_quality",
+        "description": "Run data quality checks on a table",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "table": {"type": "string", "description": "Table to validate"},
             },
         },
     },

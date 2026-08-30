@@ -23,7 +23,36 @@ TOOL_REGISTRY = {
 
 
 async def execute_remediation(state: dict) -> dict:
-    """Execute the approved remediation plan via MCP tools."""
+    """Execute the approved remediation plan via MCP tools.
+
+    SAFETY: This node re-validates that approval was granted before executing.
+    If approval_status is not 'approved' or 'auto_approved', execution is blocked.
+    """
+    # SAFETY GATE: Re-validate approval before executing
+    approval_status = state.get("approval_status", "")
+    if approval_status not in ("approved", "auto_approved"):
+        logger.warning(
+            f"Execute node blocked: approval_status={approval_status!r} "
+            f"(expected 'approved' or 'auto_approved')"
+        )
+        return {
+            "status": "blocked",
+            "execution_result": {
+                "results": [],
+                "all_success": False,
+                "actions_count": 0,
+                "success_count": 0,
+                "error": f"Execution blocked: approval status is {approval_status!r}, expected 'approved'",
+            },
+            "events": state.get("events", []) + [
+                {
+                    "type": "execution.blocked",
+                    "agent": "executor",
+                    "message": f"Execution blocked: approval status is {approval_status!r}",
+                }
+            ],
+        }
+
     remediation_plan = state.get("remediation_plan", {})
     actions = remediation_plan.get("actions", [])
     execution_results = []

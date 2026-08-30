@@ -42,6 +42,7 @@ def _incident_to_dict(inc: Incident) -> dict:
         "severity": inc.severity,
         "status": inc.status,
         "incident_type": inc.incident_type,
+        "connector_id": inc.connector_id,
         "trueforge_session_id": inc.trueforge_session_id,
         "verification_result": inc.verification_result,
     }
@@ -88,6 +89,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)) -> dict:
 async def list_incidents(
     status: str | None = None,
     severity: str | None = None,
+    connector_id: str | None = None,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
 ) -> list[Incident]:
@@ -100,6 +102,8 @@ async def list_incidents(
         query = query.where(Incident.status == status)
     if severity:
         query = query.where(Incident.severity == severity)
+    if connector_id:
+        query = query.where(Incident.connector_id == connector_id)
     result = await db.execute(query)
     return list(result.scalars().all())
 
@@ -405,9 +409,11 @@ async def _set_incident_status(
 async def execute_remediation(
     incident_id: str, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    """Execute remediation after approval.
+    """Execute remediation — REQUIRES prior human approval.
 
-    Bug 8 fix: Also called by approval endpoint when status is executing.
+    This endpoint only accepts incidents in 'approved' or 'executing' status.
+    Incidents in 'awaiting_approval' must go through the /approval endpoint first.
+    This prevents bypassing the human approval gate.
     """
     result = await db.execute(
         select(Incident).where(Incident.id == incident_id)
@@ -416,12 +422,17 @@ async def execute_remediation(
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
-    if incident.status not in (
-        "awaiting_approval", "executing"
-    ):
+    # SAFETY: Only allow execution if approval was granted
+    if incident.status == "awaiting_approval":
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot execute without human approval. Use POST /{incident_id}/approval first.",
+        )
+
+    if incident.status not in ("approved", "executing"):
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot remediate from status: {incident.status}",
+            detail=f"Cannot remediate from status: {incident.status}. Must be 'approved' or 'executing'.",
         )
 
     incident.status = "executing"

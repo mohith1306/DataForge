@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { fetchIncidents, fetchStats, startInvestigation, createIncident } from '../api';
+import { Link, useNavigate } from 'react-router-dom';
+import { fetchIncidents, fetchStats, startInvestigation, createIncident, listConnectors, runConnectorCheck } from '../api';
 
 const SEVERITY_COLORS = {
   critical: '#ef4444',
@@ -21,146 +21,284 @@ const STATUS_COLORS = {
   failed: '#ef4444',
 };
 
+const DB_ICONS = { clickhouse: '🏗️', postgres: '🐘', mysql: '🐬', snowflake: '❄️', databricks: '🧱' };
+
 export default function Dashboard() {
-  const [incidents, setIncidents] = useState([]);
-  const [stats, setStats] = useState({ total: 0, open: 0, resolved: 0, critical: 0 });
+  const navigate = useNavigate();
+  const [connectors, setConnectors] = useState([]);
+  const [allIncidents, setAllIncidents] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all');
   const [creating, setCreating] = useState(false);
+  const [checkResults, setCheckResults] = useState({});  // connId → result
+  const [checking, setChecking] = useState(null);
 
   useEffect(() => {
-    console.log('[Dashboard] Mounted');
     loadData();
-    const interval = setInterval(() => {
-      console.log('[Dashboard] Auto-refresh polling');
-      loadData();
-    }, 10000);
-    return () => {
-      console.log('[Dashboard] Unmounted');
-      clearInterval(interval);
-    };
-  }, [filter]);
+    const interval = setInterval(loadData, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   async function loadData() {
     try {
-      console.log('[Dashboard] Loading data, filter:', filter);
-      const [statsData, listData] = await Promise.all([
-        fetchStats(),
-        fetchIncidents(filter !== 'all' ? { status: filter } : {}),
+      const [connData, incData] = await Promise.all([
+        listConnectors(),
+        fetchIncidents(),
       ]);
-      setStats(statsData);
-      setIncidents(listData);
-      console.log('[Dashboard] Data loaded:', listData.length, 'incidents');
+      setConnectors(connData);
+      setAllIncidents(incData);
     } catch (err) {
-      console.error('[Dashboard] Failed to load data:', err);
+      console.error(err);
     } finally {
       setLoading(false);
     }
   }
 
+  async function handleRunCheck(connId) {
+    setChecking(connId);
+    try {
+      const res = await runConnectorCheck(connId);
+      setCheckResults(prev => ({ ...prev, [connId]: res }));
+      loadData();
+    } catch (err) {
+      setCheckResults(prev => ({ ...prev, [connId]: { error: err.message } }));
+    } finally {
+      setChecking(null);
+    }
+  }
+
   async function handleCreateIncident() {
-    console.log('[Dashboard] Creating incident...');
     setCreating(true);
     try {
-      const result = await createIncident({
+      await createIncident({
         title: 'APAC revenue dropped 42%',
         severity: 'critical',
         incident_type: 'volume_drop',
-        description: 'APAC region showing 42% revenue drop in last 5 days. Pipeline PL-001 failed.',
+        description: 'APAC region showing 42% revenue drop in last 5 days.',
       });
-      console.log('[Dashboard] Incident created:', result.id);
       loadData();
     } catch (err) {
-      console.error('[Dashboard] Failed to create incident:', err);
+      console.error(err);
     } finally {
       setCreating(false);
     }
   }
 
   async function handleStartInvestigation(incidentId) {
-    console.log('[Dashboard] Starting investigation for:', incidentId);
     try {
       await startInvestigation(incidentId);
-      console.log('[Dashboard] Investigation started, refreshing...');
       loadData();
     } catch (err) {
-      console.error('[Dashboard] Failed to start investigation:', err);
+      console.error(err);
     }
   }
 
+  if (loading) return <div className="loading">Loading dashboard...</div>;
+
   return (
     <div>
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-value">{stats.total}</div>
-          <div className="stat-label">Total Incidents</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value" style={{ color: '#3b82f6' }}>{stats.open}</div>
-          <div className="stat-label">Open</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value" style={{ color: '#22c55e' }}>{stats.resolved}</div>
-          <div className="stat-label">Resolved</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value" style={{ color: '#ef4444' }}>{stats.critical}</div>
-          <div className="stat-label">Critical</div>
-        </div>
-      </div>
-
-      <div className="card" style={{ marginTop: '1.5rem' }}>
-        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Incidents</span>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <div className="filter-group">
-              {['all', 'created', 'investigating', 'resolved'].map(s => (
-                <button
-                  key={s}
-                  className={`filter-btn ${filter === s ? 'active' : ''}`}
-                  onClick={() => {
-                    console.log('[Dashboard] Filter changed to:', s);
-                    setFilter(s);
-                  }}
-                >
-                  {s.charAt(0).toUpperCase() + s.slice(1)}
-                </button>
-              ))}
+      {/* Global Stats */}
+      {connectors.length > 0 && (
+        <div className="stats-grid" style={{ marginBottom: '1.5rem' }}>
+          <div className="stat-card" onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
+            <div className="stat-value">{connectors.length}</div>
+            <div className="stat-label">Databases</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-value" style={{ color: '#22c55e' }}>
+              {connectors.filter(c => c.monitoring).length}
             </div>
-            <button
-              className="btn btn-primary"
-              style={{ padding: '0.375rem 0.75rem', fontSize: '0.8rem' }}
-              onClick={handleCreateIncident}
-              disabled={creating}
-            >
-              {creating ? 'Creating...' : '+ New Incident'}
+            <div className="stat-label">Monitoring</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-value">{allIncidents.length}</div>
+            <div className="stat-label">Total Incidents</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-value" style={{ color: '#ef4444' }}>
+              {allIncidents.filter(i => i.status === 'created').length}
+            </div>
+            <div className="stat-label">Open</div>
+          </div>
+        </div>
+      )}
+
+      {/* Per-Database Sections */}
+      {connectors.length === 0 ? (
+        <div className="card">
+          <div className="empty-state">
+            <p>No databases connected</p>
+            <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={() => navigate('/')}>
+              Connect a Database
             </button>
           </div>
         </div>
+      ) : (
+        connectors.map(conn => {
+          const result = checkResults[conn.id];
+          const totalIssues = result
+            ? (result.failures?.length || 0) + (result.stale?.length || 0) + (result.quality_issues?.length || 0)
+            : null;
+          const dbIncidents = allIncidents.filter(inc => inc.connector_id === conn.id);
 
-        {loading ? (
-          <div className="loading">Loading incidents...</div>
-        ) : incidents.length === 0 ? (
-          <div className="empty-state">
-            <p>No incidents found</p>
-            <p style={{ color: '#666', fontSize: '0.8rem', marginTop: '0.5rem' }}>
-              Click "+ New Incident" to create one
-            </p>
+          return (
+            <div key={conn.id} className="card" style={{ marginBottom: '1.5rem' }}>
+              {/* Database Header */}
+              <div
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', padding: '0.5rem 0' }}
+                onClick={() => navigate(`/databases/${conn.id}`)}
+              >
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                  <span style={{ fontSize: '1.5rem' }}>{DB_ICONS[conn.db_type] || '🗄️'}</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '1rem' }}>{conn.name}</div>
+                    <div style={{ color: '#888', fontSize: '0.8rem' }}>
+                      {conn.db_type} · {conn.discovered_tables.length} table{conn.discovered_tables.length !== 1 ? 's' : ''} · {conn.monitoring ? '● Monitoring' : '○ Idle'}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className="btn btn-primary"
+                    style={{ fontSize: '0.75rem', padding: '0.375rem 0.75rem', background: '#8b5cf6' }}
+                    onClick={(e) => { e.stopPropagation(); handleRunCheck(conn.id); }}
+                    disabled={checking === conn.id}
+                  >
+                    {checking === conn.id ? 'Checking...' : 'Run Check'}
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    style={{ fontSize: '0.75rem', padding: '0.375rem 0.75rem' }}
+                    onClick={(e) => { e.stopPropagation(); navigate(`/databases/${conn.id}`); }}
+                  >
+                    Details
+                  </button>
+                </div>
+              </div>
+
+              {/* Check Results */}
+              {result && !result.error && (
+                <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: totalIssues > 0 ? '#ef444410' : '#22c55e10', border: `1px solid ${totalIssues > 0 ? '#ef444440' : '#22c55e40'}`, borderRadius: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.875rem', color: totalIssues > 0 ? '#ef4444' : '#22c55e' }}>
+                      {totalIssues > 0 ? `${totalIssues} issue${totalIssues !== 1 ? 's' : ''} detected` : 'All healthy'}
+                    </span>
+                    <div style={{ display: 'flex', gap: '1rem', fontSize: '0.75rem' }}>
+                      {result.failures?.length > 0 && <span style={{ color: '#ef4444' }}>🔴 {result.failures.length} failures</span>}
+                      {result.stale?.length > 0 && <span style={{ color: '#f59e0b' }}>🟡 {result.stale.length} stale</span>}
+                      {result.quality_issues?.length > 0 && <span style={{ color: '#a855f7' }}>🟣 {result.quality_issues.length} quality</span>}
+                    </div>
+                  </div>
+
+                  {/* Failure Details */}
+                  {result.failures?.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                      {result.failures.slice(0, 3).map((f, i) => (
+                        <div key={i} style={{ fontSize: '0.75rem', padding: '0.375rem 0.5rem', background: '#0a0a0a', borderRadius: '4px' }}>
+                          <span style={{ color: '#ef4444', fontWeight: 500 }}>{f.pipeline_name || f.pipeline_id}</span>
+                          <span style={{ color: '#555', margin: '0 0.375rem' }}>·</span>
+                          <span style={{ color: '#888' }}>{f.error_message || 'No error'}</span>
+                        </div>
+                      ))}
+                      {result.failures.length > 3 && (
+                        <div style={{ fontSize: '0.7rem', color: '#666' }}>+{result.failures.length - 3} more</div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Stale Details */}
+                  {result.stale?.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginTop: result.failures?.length ? '0.5rem' : 0 }}>
+                      {result.stale.slice(0, 3).map((s, i) => (
+                        <div key={i} style={{ fontSize: '0.75rem', padding: '0.375rem 0.5rem', background: '#0a0a0a', borderRadius: '4px' }}>
+                          <span style={{ color: '#f59e0b', fontWeight: 500 }}>{s.pipeline_name || s.pipeline_id}</span>
+                          <span style={{ color: '#555', margin: '0 0.375rem' }}>·</span>
+                          <span style={{ color: '#888' }}>last run: {s.last_run || 'unknown'}</span>
+                        </div>
+                      ))}
+                      {result.stale.length > 3 && (
+                        <div style={{ fontSize: '0.7rem', color: '#666' }}>+{result.stale.length - 3} more</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {result?.error && (
+                <div style={{ marginTop: '0.75rem', padding: '0.5rem 0.75rem', background: '#ef444410', border: '1px solid #ef444440', borderRadius: '6px', fontSize: '0.8rem', color: '#ef4444' }}>
+                  {result.error}
+                </div>
+              )}
+
+              {/* Discovered Tables Preview */}
+              {conn.discovered_tables.length > 0 && (
+                <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
+                  {conn.discovered_tables.map((t, i) => (
+                    <span key={i} style={{ fontSize: '0.7rem', background: '#1a1a1a', border: '1px solid #333', borderRadius: '3px', padding: '0.125rem 0.5rem', color: '#888' }}>
+                      {t.table} <span style={{ color: '#555' }}>({t.row_count || 0} rows)</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Incidents for this database */}
+              {dbIncidents.length > 0 && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#ccc', marginBottom: '0.5rem' }}>
+                    Incidents ({dbIncidents.length})
+                  </div>
+                  <div className="incident-list">
+                    {dbIncidents.slice(0, 5).map(inc => (
+                      <Link
+                        key={inc.id}
+                        to={`/incidents/${inc.id}`}
+                        className="incident-row"
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', textDecoration: 'none', color: 'inherit' }}
+                      >
+                        <div className="incident-main">
+                          <span className="severity-dot" style={{ background: SEVERITY_COLORS[inc.severity] || '#666' }} />
+                          <div>
+                            <div className="incident-title">{inc.title}</div>
+                            <div className="incident-meta">
+                              {inc.incident_type && <span className="incident-type">{inc.incident_type}</span>}
+                              <span>{new Date(inc.created_at).toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <span className="badge" style={{ background: `${STATUS_COLORS[inc.status] || '#666'}20`, color: STATUS_COLORS[inc.status] || '#666', fontSize: '0.7rem' }}>
+                          {inc.status}
+                        </span>
+                      </Link>
+                    ))}
+                    {dbIncidents.length > 5 && (
+                      <div
+                        style={{ fontSize: '0.75rem', color: '#8b5cf6', cursor: 'pointer', padding: '0.375rem 0' }}
+                        onClick={() => navigate(`/databases/${conn.id}`)}
+                      >
+                        +{dbIncidents.length - 5} more incidents →
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })
+      )}
+
+      {/* Incidents from monitor (no connector_id) */}
+      {allIncidents.filter(inc => !inc.connector_id).length > 0 && (
+        <div className="card" style={{ marginTop: '1.5rem' }}>
+          <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Monitor Incidents</span>
           </div>
-        ) : (
           <div className="incident-list">
-            {incidents.map(inc => (
+            {allIncidents.filter(inc => !inc.connector_id).slice(0, 10).map(inc => (
               <div key={inc.id} className="incident-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Link
                   to={`/incidents/${inc.id}`}
                   style={{ flex: 1, textDecoration: 'none', color: 'inherit' }}
-                  onClick={() => console.log('[Dashboard] Navigating to incident:', inc.id)}
                 >
                   <div className="incident-main">
-                    <span
-                      className="severity-dot"
-                      style={{ background: SEVERITY_COLORS[inc.severity] || '#666' }}
-                    />
+                    <span className="severity-dot" style={{ background: SEVERITY_COLORS[inc.severity] || '#666' }} />
                     <div>
                       <div className="incident-title">{inc.title}</div>
                       <div className="incident-meta">
@@ -171,23 +309,14 @@ export default function Dashboard() {
                   </div>
                 </Link>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <span
-                    className="badge"
-                    style={{
-                      background: `${STATUS_COLORS[inc.status] || '#666'}20`,
-                      color: STATUS_COLORS[inc.status] || '#666',
-                    }}
-                  >
+                  <span className="badge" style={{ background: `${STATUS_COLORS[inc.status] || '#666'}20`, color: STATUS_COLORS[inc.status] || '#666' }}>
                     {inc.status}
                   </span>
                   {inc.status === 'created' && (
                     <button
                       className="btn btn-primary"
                       style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem' }}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        handleStartInvestigation(inc.id);
-                      }}
+                      onClick={(e) => { e.preventDefault(); handleStartInvestigation(inc.id); }}
                     >
                       Start
                     </button>
@@ -196,8 +325,8 @@ export default function Dashboard() {
               </div>
             ))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

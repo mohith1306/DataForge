@@ -40,8 +40,8 @@ APPROVAL_REQUIRED_LEVELS = {"HIGH", "CRITICAL"}
 
 
 def get_risk_level(tool_name: str) -> str:
-    """Get the risk level for a tool."""
-    return TOOL_RISK_LEVELS.get(tool_name, "MEDIUM")
+    """Get the risk level for a tool. Unknown tools default to HIGH (conservative)."""
+    return TOOL_RISK_LEVELS.get(tool_name, "HIGH")
 
 
 def requires_approval(tool_name: str) -> bool:

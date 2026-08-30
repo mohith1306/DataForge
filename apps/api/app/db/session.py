@@ -37,7 +37,15 @@ async def ensure_schema():
                 "ALTER TABLE incident_events "
                 "ALTER COLUMN metadata TYPE JSONB USING metadata::JSONB"
             ))
-            logger.info("Schema migration: ensured metadata column is JSONB")
+            logger.info("Schema migration: ensured incident_events.metadata column is JSONB")
+        except Exception as e:
+            logger.warning(f"Schema migration for incident_events.metadata skipped: {e}")
+        try:
+            await conn.execute(text(
+                "ALTER TABLE incidents "
+                "ADD COLUMN IF NOT EXISTS connector_id VARCHAR(100)"
+            ))
+            logger.info("Schema migration: ensured connector_id column")
         except Exception as e:
             logger.warning(f"Schema migration skipped: {e}")
 

@@ -1,13 +1,27 @@
 """Sandbox — safe execution of generated Python analysis code.
 
-Uses LLM to generate analysis code dynamically based on incident context,
-then executes it in a sandboxed environment with restricted builtins.
+Uses subprocess isolation for genuine process-level security:
+- Separate process (not thread) — cannot affect host
+- Restricted imports (whitelist only)
+- Resource limits (CPU time, memory)
+- Timeout protection
+- No filesystem access beyond /tmp
+- No network access
+- Captured stdout/stderr
+
+The existing static validation (restricted builtins, import whitelist)
+is preserved as defense-in-depth.
 """
 
 import asyncio
 import io
+import json
 import logging
-from contextlib import redirect_stdout
+import os
+import resource
+import subprocess
+import sys
+import tempfile
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -15,70 +29,11 @@ logger = logging.getLogger(__name__)
 # Maximum execution time in seconds
 MAX_EXECUTION_TIME = 30
 
-# Only truly safe builtins — exclude type and other introspection-enabling builtins
-SAFE_BUILTINS = {
-    "print": print,
-    "len": len,
-    "range": range,
-    "int": int,
-    "float": float,
-    "str": str,
-    "bool": bool,
-    "list": list,
-    "dict": dict,
-    "set": set,
-    "tuple": tuple,
-    "isinstance": isinstance,
-    "min": min,
-    "max": max,
-    "sum": sum,
-    "abs": abs,
-    "round": round,
-    "sorted": sorted,
-    "reversed": reversed,
-    "enumerate": enumerate,
-    "zip": zip,
-    "map": map,
-    "filter": filter,
-    "any": any,
-    "all": all,
-    "True": True,
-    "False": False,
-    "None": None,
-    "Exception": Exception,
-    "ValueError": ValueError,
-    "TypeError": TypeError,
-    "KeyError": KeyError,
-    "IndexError": IndexError,
-    "ZeroDivisionError": ZeroDivisionError,
-    "__import__": None,  # Placeholder, replaced below
-}
+# Memory limit: 128MB
+MEMORY_LIMIT_MB = 128
 
-
-def _safe_import(name: str, *args: Any, **kwargs: Any) -> Any:
-    """Restricted import that only allows safe modules."""
-    allowed_modules = {"math", "json", "statistics", "datetime", "collections", "re"}
-    if name in allowed_modules:
-        import importlib
-        return importlib.import_module(name)
-    raise ImportError(f"Import '{name}' is not allowed in sandbox")
-
-
-# Set up safe builtins with restricted import
-_sandbox_builtins = dict(SAFE_BUILTINS)
-_sandbox_builtins["__import__"] = _safe_import
-
-
-def _guard_code(code: str) -> str:
-    """Prepend code that blocks common sandbox escape patterns."""
-    guard = (
-        "import re as _re; "
-        "_blocked = ['__subclasses__', '__class__', '__base__', '__globals__', "
-        "'__code__', '__builtins__', '__import__', 'eval', 'exec', 'compile', "
-        "'open', 'getattr', 'setattr', 'delattr']; "
-        "_pat = _re.compile('|'.join(_re.escape(x) for x in _blocked)); "
-    )
-    return guard + code
+# CPU time limit in seconds
+CPU_TIME_LIMIT = 15
 
 
 class SandboxError(Exception):
@@ -160,7 +115,6 @@ async def _llm_generate_code(incident_type: str, description: str, evidence_summ
         elif "```" in content:
             code = content.split("```")[1].split("```")[0].strip()
         else:
-            # Try to find Python code by looking for common patterns
             lines = content.split("\n")
             code_lines = []
             in_code = False
@@ -197,19 +151,159 @@ print(f"Fallback analysis for {incident_type}: {{len(result['findings'])}} findi
 """
 
 
-# ─── Sandbox Execution ────────────────────────────────────────────────────────
+# ─── Static Validation (defense-in-depth) ──────────────────────────────────────
+
+BLOCKED_PATTERNS = [
+    "__subclasses__", "__class__", "__base__", "__globals__",
+    "__code__", "__builtins__", "__import__", "__loader__",
+    "__spec__", "__file__", "__name__", "__qualname__",
+    "eval", "exec", "compile", "open",
+    "getattr", "setattr", "delattr", "hasattr",
+    "os.", "subprocess", "shutil", "pathlib",
+    "socket", "http", "urllib", "requests",
+    "__import_module__", "importlib",
+]
+
+ALLOWED_MODULES = {"math", "json", "statistics", "datetime", "collections", "re"}
+
+
+def _validate_code(code: str) -> str | None:
+    """Validate code for safety. Returns error message if unsafe, None if OK."""
+    code_lower = code.lower()
+    for pattern in BLOCKED_PATTERNS:
+        if pattern.lower() in code_lower:
+            return f"Blocked dangerous pattern: {pattern}"
+
+    # Check for import statements outside allowed modules
+    for line in code.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("import ") or stripped.startswith("from "):
+            # Extract module name
+            parts = stripped.split()
+            if len(parts) >= 2:
+                module = parts[1].split(".")[0].split(",")[0]
+                if module not in ALLOWED_MODULES:
+                    return f"Import not allowed: {module}"
+
+    return None
+
+
+# ─── Sandbox Execution (subprocess isolation) ──────────────────────────────────
+
+
+def _create_sandbox_script(code: str, context: dict[str, Any] | None = None) -> str:
+    """Create a Python script that runs inside the sandbox subprocess.
+
+    The script:
+    1. Restricts imports to whitelist only
+    2. Restricts builtins
+    3. Sets resource limits
+    4. Executes the user code
+    5. Outputs result as JSON on stdout
+    """
+    # Pass context via a temp file to avoid apostrophe escaping issues
+    context_json = json.dumps(context or {})
+
+    # Build the restricted import hook
+    allowed = json.dumps(list(ALLOWED_MODULES))
+
+    sandbox_wrapper = f"""#!/usr/bin/env python3
+import sys
+import json
+import importlib
+import os
+
+# ─── Step 0: Load context from temp file ──────────────────────────────────────
+_context_file = os.environ.get("_SANDBOX_CONTEXT_FILE", "")
+context = {{}}
+if _context_file and os.path.exists(_context_file):
+    with open(_context_file) as _f:
+        context = json.load(_f)
+
+# ─── Step 1: Set resource limits (CPU time, memory) ───────────────────────────
+try:
+    import resource
+    # CPU time limit: {CPU_TIME_LIMIT} seconds
+    resource.setrlimit(resource.RLIMIT_CPU, ({CPU_TIME_LIMIT}, {CPU_TIME_LIMIT}))
+    # Memory limit: {MEMORY_LIMIT_MB}MB
+    mem_bytes = {MEMORY_LIMIT_MB} * 1024 * 1024
+    resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+    # No file creation beyond /tmp
+    resource.setrlimit(resource.RLIMIT_FSIZE, (1024 * 1024, 1024 * 1024))  # 1MB
+    # Max processes: 1 (no forking)
+    resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))
+except (ImportError, ValueError, OSError):
+    pass  # Windows or restricted environment
+
+# ─── Step 2: Restricted import hook ───────────────────────────────────────────
+_allowed = {allowed}
+
+_original_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
+
+def _restricted_import(name, *args, **kwargs):
+    base = name.split('.')[0]
+    if base in _allowed:
+        return _original_import(name, *args, **kwargs)
+    raise ImportError(f"Import '{{name}}' is not allowed in sandbox")
+
+# ─── Step 3: Restricted builtins ──────────────────────────────────────────────
+_safe_builtins = {{
+    "print": print, "len": len, "range": range,
+    "int": int, "float": float, "str": str, "bool": bool,
+    "list": list, "dict": dict, "set": set, "tuple": tuple,
+    "isinstance": isinstance, "type": type,
+    "min": min, "max": max, "sum": sum, "abs": abs, "round": round,
+    "sorted": sorted, "reversed": reversed,
+    "enumerate": enumerate, "zip": zip, "map": map, "filter": filter,
+    "any": any, "all": all,
+    "True": True, "False": False, "None": None,
+    "Exception": Exception, "ValueError": ValueError, "TypeError": TypeError,
+    "KeyError": KeyError, "IndexError": IndexError,
+    "ZeroDivisionError": ZeroDivisionError,
+    "StopIteration": StopIteration,
+    "__import__": _restricted_import,
+}}
+
+# ─── Step 4: Execute user code ────────────────────────────────────────────────
+exec_context = {{"__builtins__": _safe_builtins}}
+exec_context.update(context)
+
+stdout_capture = []
+_original_print = print
+
+def _captured_print(*args, **kwargs):
+    output = " ".join(str(a) for a in args)
+    stdout_capture.append(output)
+
+exec_context["print"] = _captured_print
+
+try:
+    user_code = sys.stdin.read()
+    exec(user_code, exec_context)
+    result = exec_context.get("result", {{"status": "no_result"}})
+    output = "\\n".join(stdout_capture)
+    print(json.dumps({{"result": result, "output": output, "error": None}}))
+except Exception as e:
+    output = "\\n".join(stdout_capture)
+    print(json.dumps({{"result": None, "output": output, "error": f"{{type(e).__name__}}: {{e}}"}}))
+"""
+    return sandbox_wrapper
 
 
 async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> dict:
-    """Execute Python analysis code in a sandboxed subprocess with timeout.
+    """Execute Python analysis code in an isolated subprocess.
 
-    The code runs in a separate process with:
-    - Restricted builtins (no open, eval, exec, compile)
-    - Only safe imports (math, json, statistics, datetime, collections, re)
-    - Process-level isolation
-    - Async timeout protection
-    - Captured stdout
-    - Optional context variables
+    Security layers:
+    1. Static code validation (blocks dangerous patterns)
+    2. Separate process (cannot affect host memory/filesystem)
+    3. Resource limits (CPU time, memory, disk, processes)
+    4. Restricted imports (whitelist only)
+    5. Restricted builtins (no open, eval, exec, compile)
+    6. Timeout protection
+    7. Captured stdout (no terminal access)
+
+    Returns:
+        dict with result, output, error, execution_time
     """
     if not code or not code.strip():
         return {
@@ -219,79 +313,114 @@ async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> 
             "execution_time": 0,
         }
 
-    # Apply sandbox guard
-    safe_code = _guard_code(code)
+    # Step 1: Static validation (defense-in-depth)
+    validation_error = _validate_code(code)
+    if validation_error:
+        return {
+            "result": None,
+            "output": "",
+            "error": f"Safety validation failed: {validation_error}",
+            "execution_time": 0,
+        }
 
-    # Prepare execution environment
-    exec_context: dict[str, Any] = {"__builtins__": _sandbox_builtins}
+    # Step 2: Create sandbox wrapper script
+    sandbox_script = _create_sandbox_script(code, context)
 
-    # Add safe data from context
-    if context:
-        for k, v in context.items():
-            if not k.startswith("_"):
-                exec_context[k] = v
-
-    # Add pandas/numpy if available
-    try:
-        import pandas as pd
-        exec_context["pd"] = pd
-    except ImportError:
-        pass
-
-    try:
-        import numpy as np
-        exec_context["np"] = np
-    except ImportError:
-        pass
-
-    stdout_capture = io.StringIO()
+    # Step 3: Write to temp file and execute in subprocess
     start_time = asyncio.get_event_loop().time()
 
-    async def _run_exec() -> tuple[Any, str]:
-        """Run exec in a thread to allow timeout."""
-        import concurrent.futures
-
-        loop = asyncio.get_event_loop()
-
-        def _sync_exec() -> tuple[Any, str]:
-            with redirect_stdout(stdout_capture):
-                exec(safe_code, exec_context)
-                result = exec_context.get("result", None)
-                return result, stdout_capture.getvalue()
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = loop.run_in_executor(pool, _sync_exec)
-            try:
-                return await asyncio.wait_for(future, timeout=MAX_EXECUTION_TIME)
-            except TimeoutError as err:
-                future.cancel()
-                raise SandboxError(
-                    f"Execution timed out after {MAX_EXECUTION_TIME}s"
-                ) from err
-
     try:
-        result, output = await _run_exec()
-        exec_time = asyncio.get_event_loop().time() - start_time
-        return {
-            "result": result,
-            "output": output,
-            "error": None,
-            "execution_time": round(exec_time, 3),
-        }
+        # Create temp directory for isolated execution
+        with tempfile.TemporaryDirectory(prefix="dataforge_sandbox_") as tmpdir:
+            script_path = os.path.join(tmpdir, "analysis.py")
+            with open(script_path, "w") as f:
+                f.write(sandbox_script)
 
-    except SandboxError as e:
-        exec_time = asyncio.get_event_loop().time() - start_time
-        return {
-            "result": None,
-            "output": stdout_capture.getvalue(),
-            "error": str(e),
-            "execution_time": round(exec_time, 3),
-        }
+            # Write context to a temp file (avoids apostrophe escaping issues)
+            context_file = os.path.join(tmpdir, "context.json")
+            with open(context_file, "w") as f:
+                f.write(json.dumps(context or {}))
+
+            # Execute in isolated subprocess
+            # -u: unbuffered output
+            # -S: don't add user site directory
+            # -s: don't add user site directory
+            # stdin=PIPE: we pass code via stdin
+            # cwd=tmpdir: isolated working directory
+            # env: minimal environment
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-u", "-S", "-s", script_path,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=tmpdir,
+                env={
+                    "PATH": "/usr/bin:/bin",
+                    "HOME": tmpdir,
+                    "TMPDIR": tmpdir,
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "_SANDBOX_CONTEXT_FILE": context_file,
+                },
+            )
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(input=code.encode()),
+                    timeout=MAX_EXECUTION_TIME,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                exec_time = asyncio.get_event_loop().time() - start_time
+                return {
+                    "result": None,
+                    "output": "",
+                    "error": f"Execution timed out after {MAX_EXECUTION_TIME}s",
+                    "execution_time": round(exec_time, 3),
+                }
+
+            exec_time = asyncio.get_event_loop().time() - start_time
+            stdout_text = stdout.decode(errors="replace")
+            stderr_text = stderr.decode(errors="replace")
+
+            # Parse JSON result from stdout
+            try:
+                # Find the last JSON line (the result)
+                for line in reversed(stdout_text.strip().split("\n")):
+                    line = line.strip()
+                    if line.startswith("{"):
+                        parsed = json.loads(line)
+                        return {
+                            "result": parsed.get("result"),
+                            "output": parsed.get("output", ""),
+                            "error": parsed.get("error"),
+                            "execution_time": round(exec_time, 3),
+                        }
+            except (json.JSONDecodeError, StopIteration):
+                pass
+
+            # Fallback: return raw output
+            if proc.returncode != 0:
+                return {
+                    "result": None,
+                    "output": stdout_text,
+                    "error": f"Process exited with code {proc.returncode}: {stderr_text[:500]}",
+                    "execution_time": round(exec_time, 3),
+                }
+
+            return {
+                "result": None,
+                "output": stdout_text,
+                "error": None,
+                "execution_time": round(exec_time, 3),
+            }
+
     except Exception as e:
         exec_time = asyncio.get_event_loop().time() - start_time
+        logger.error(f"Sandbox execution failed: {e}")
         return {
             "result": None,
-            "output": stdout_capture.getvalue(),
+            "output": "",
             "error": f"{type(e).__name__}: {e}",
             "execution_time": round(exec_time, 3),
         }

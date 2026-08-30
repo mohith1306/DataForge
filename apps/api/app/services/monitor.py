@@ -1,9 +1,14 @@
 """Background Monitor — polls pipeline health and auto-creates incidents.
 
-Runs as a background task inside the FastAPI process. Checks ClickHouse
-every N seconds for pipeline failures, data-quality anomalies, and
-freshness violations. When something is wrong it creates an Incident
-record and (optionally) kicks off a TrueForge investigation.
+Runs as a background task inside the FastAPI process. Checks the configured
+database (ClickHouse, PostgreSQL, or custom) every N seconds for pipeline
+failures, data-quality anomalies, and freshness violations. When something
+is wrong it creates an Incident record and kicks off a TrueForge investigation.
+
+Database backend is configured via MONITOR_DB_TYPE env var:
+  - clickhouse (default): uses ClickHouse HTTP interface
+  - postgres: uses asyncpg with DATABASE_URL
+  - custom: uses user-provided SQL queries via MONITOR_CUSTOM_QUERY_URL
 """
 
 import asyncio
@@ -18,6 +23,7 @@ from sqlalchemy import select
 from apps.api.app.core.config import settings
 from apps.api.app.db.models import Incident, IncidentEvent
 from apps.api.app.db.session import async_session_factory
+from apps.api.app.services.db_adapter import MonitorDBAdapter, create_monitor_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -33,75 +39,37 @@ _task: asyncio.Task | None = None
 _last_check: float | None = None
 _last_result: dict[str, Any] = {}
 _incidents_created = 0
-
-CLICKHOUSE_URL = f"http://{settings.clickhouse_host}:{settings.clickhouse_port}"
-
-
-# ── ClickHouse helper ────────────────────────────────────────────────────────
-async def _query(sql: str) -> list[dict]:
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{CLICKHOUSE_URL}/",
-            params={"database": settings.clickhouse_database, "default_format": "JSONEachRow"},
-            content=sql,
-        )
-        if resp.status_code != 200:
-            logger.warning("ClickHouse query failed (%s): %s", resp.status_code, resp.text[:200])
-            return []
-        text = resp.text.strip()
-        if not text:
-            return []
-        return [json.loads(line) for line in text.split("\n") if line.strip()]
+_db_adapter: MonitorDBAdapter | None = None
 
 
-# ── detection checks ─────────────────────────────────────────────────────────
+def _get_adapter() -> MonitorDBAdapter:
+    """Get or create the database adapter."""
+    global _db_adapter
+    if _db_adapter is None:
+        _db_adapter = create_monitor_adapter()
+        logger.info("Created monitor DB adapter: %s", type(_db_adapter).__name__)
+    return _db_adapter
+
+
+# ── detection checks (delegated to adapter) ───────────────────────────────────
 
 async def _check_pipeline_failures() -> list[dict]:
     """Return list of recently failed pipeline runs."""
-    sql = (
-        f"SELECT pipeline_id, pipeline_name, status, started_at, error_message "
-        f"FROM {settings.clickhouse_database}.pipeline_events "
-        f"WHERE status = 'FAILED' "
-        f"AND started_at >= now() - INTERVAL {DEFAULT_POLL_INTERVAL * 2} SECOND "
-        f"ORDER BY started_at DESC LIMIT 20"
+    return await _get_adapter().check_pipeline_failures(
+        lookback_seconds=DEFAULT_POLL_INTERVAL * 2,
     )
-    return await _query(sql)
 
 
 async def _check_pipeline_freshness() -> list[dict]:
     """Return pipelines that haven't run recently."""
-    sql = (
-        f"SELECT pipeline_id, pipeline_name, max(started_at) as last_run "
-        f"FROM {settings.clickhouse_database}.pipeline_events "
-        f"GROUP BY pipeline_id, pipeline_name "
-        f"HAVING last_run < now() - INTERVAL {STALE_THRESHOLD_MINUTES} MINUTE "
-        f"ORDER BY last_run ASC"
+    return await _get_adapter().check_pipeline_freshness(
+        stale_minutes=STALE_THRESHOLD_MINUTES,
     )
-    return await _query(sql)
 
 
 async def _check_data_quality() -> list[dict]:
-    """Check null rates in key tables."""
-    checks = []
-    try:
-        rows = await _query(
-            f"SELECT countIf(customer_region IS NULL) as nulls, count() as total "
-            f"FROM {settings.clickhouse_database}.customer_orders"
-        )
-        if rows:
-            nulls = rows[0].get("nulls", 0)
-            total = rows[0].get("total", 1)
-            rate = nulls / total if total > 0 else 0
-            if rate > NULL_RATE_THRESHOLD:
-                checks.append({
-                    "table": "customer_orders",
-                    "column": "customer_region",
-                    "null_rate": round(rate, 4),
-                    "threshold": NULL_RATE_THRESHOLD,
-                })
-    except Exception as exc:
-        logger.debug("DQ check skipped: %s", exc)
-    return checks
+    """Check data quality metrics."""
+    return await _get_adapter().check_data_quality()
 
 
 # ── incident creation ────────────────────────────────────────────────────────
@@ -111,6 +79,7 @@ async def _create_incident(
     description: str,
     severity: str,
     incident_type: str,
+    connector_id: str | None = None,
 ) -> str | None:
     """Insert an Incident + event row, return the incident id."""
     try:
@@ -122,6 +91,7 @@ async def _create_incident(
                     severity=severity,
                     status="created",
                     incident_type=incident_type,
+                    connector_id=connector_id,
                 )
                 db.add(inc)
                 await db.flush()

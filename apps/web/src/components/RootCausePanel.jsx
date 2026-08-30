@@ -3,7 +3,28 @@ export default function RootCausePanel({ events }) {
     e => e.type?.includes('diagnosis') || e.type?.includes('root_cause')
   ) || [];
 
-  if (diagnosisEvents.length === 0) {
+  // Also parse ROOT CAUSE from investigation_complete text
+  const completedEvent = events?.find(e => e.type === 'investigation_complete' || e.type === 'investigation.completed');
+  let parsedRootCause = null;
+  if (completedEvent?.message) {
+    const msg = completedEvent.message;
+    const rcMatch = msg.match(/ROOT CAUSE:\s*([\s\S]*?)(?=\nCONFIDENCE|\nEVIDENCE|\nREMEDIATION|$)/i);
+    const confMatch = msg.match(/CONFIDENCE:\s*(high|medium|low|\d+%?)/i);
+    const remMatch = msg.match(/REMEDIATION(?:\s*PLAN)?:\s*([\s\S]*?)$/i);
+    parsedRootCause = {
+      id: 'parsed-root-cause',
+      type: 'investigation_result',
+      message: rcMatch ? rcMatch[1].trim() : null,
+      metadata_: {
+        confidence: confMatch ? (confMatch[1].includes('high') ? 0.9 : confMatch[1].includes('medium') ? 0.6 : 0.3) : null,
+        remediation: remMatch ? remMatch[1].trim() : null,
+      },
+    };
+  }
+
+  const allDiagnosis = [...diagnosisEvents, ...(parsedRootCause ? [parsedRootCause] : [])];
+
+  if (allDiagnosis.length === 0) {
     return (
       <div className="empty-state">
         <p>No root cause analysis yet</p>
@@ -14,7 +35,7 @@ export default function RootCausePanel({ events }) {
     );
   }
 
-  const latestDiagnosis = diagnosisEvents[diagnosisEvents.length - 1];
+  const latestDiagnosis = allDiagnosis[allDiagnosis.length - 1];
   const metadata = latestDiagnosis.metadata_ || {};
 
   return (
