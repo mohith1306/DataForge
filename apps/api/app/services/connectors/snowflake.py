@@ -36,8 +36,15 @@ class SnowflakeConnector(DatabaseConnector):
             cursor.close()
             logger.info("Connected to Snowflake: %s/%s", self.config.host, self.config.database)
             return True
+        except ImportError as e:
+            msg = "snowflake-connector-python not installed. Run: pip install snowflake-connector-python"
+            logger.error(msg)
+            self._last_error = msg
+            return False
         except Exception as e:
-            logger.error("Snowflake connection failed: %s", e)
+            msg = f"{type(e).__name__}: {e}"
+            logger.error("Snowflake connection failed: %s", msg)
+            self._last_error = msg
             return False
 
     async def disconnect(self) -> None:
