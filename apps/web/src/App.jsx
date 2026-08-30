@@ -3,6 +3,7 @@ import Dashboard from './pages/Dashboard';
 import IncidentDetail from './pages/IncidentDetail';
 import ChaosLab from './pages/ChaosLab';
 import Connectors from './pages/Connectors';
+import DatabaseDetail from './pages/DatabaseDetail';
 
 function NavLink({ to, children }) {
   const location = useLocation();
@@ -31,6 +32,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Connectors />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/databases/:id" element={<DatabaseDetail />} />
           <Route path="/incidents/:id" element={<IncidentDetail />} />
           <Route path="/chaos" element={<ChaosLab />} />
         </Routes>

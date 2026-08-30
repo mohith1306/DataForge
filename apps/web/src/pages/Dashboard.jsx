@@ -114,7 +114,13 @@ export default function Dashboard() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {connectors.map(conn => (
-              <div key={conn.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', background: '#1a1a1a', borderRadius: '6px' }}>
+              <div
+                key={conn.id}
+                onClick={() => navigate(`/databases/${conn.id}`)}
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', background: '#1a1a1a', borderRadius: '6px', cursor: 'pointer', transition: 'background 0.2s' }}
+                onMouseEnter={e => e.currentTarget.style.background = '#222'}
+                onMouseLeave={e => e.currentTarget.style.background = '#1a1a1a'}
+              >
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
                   <span style={{ fontSize: '1.25rem' }}>{DB_ICONS[conn.db_type] || '🗄️'}</span>
                   <div>

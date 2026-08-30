@@ -49,6 +49,13 @@ export async function runConnectorCheck(id) {
   return res.json();
 }
 
+export async function getConnector(id) {
+  console.log('[API] GET /connectors/' + id);
+  const res = await fetch(`${API_BASE}/connectors/${id}`);
+  if (!res.ok) throw new Error('Connector not found');
+  return res.json();
+}
+
 export async function fetchStats() {
   console.log('[API] GET /incidents/stats');
   const res = await fetch(`${API_BASE}/incidents/stats`);
