@@ -74,6 +74,16 @@ class SnowflakeConnector(DatabaseConnector):
             return list(rows[0].values())[0]
         return None
 
+    async def execute_non_query(self, sql: str) -> None:
+        """Execute INSERT/CREATE without returning results."""
+        if not self._connection:
+            raise RuntimeError("Not connected")
+        cursor = self._connection.cursor()
+        try:
+            cursor.execute(sql)
+        finally:
+            cursor.close()
+
     async def list_tables(self, schema: str | None = None) -> list[str]:
         schema = schema or self.config.schema or "PUBLIC"
         try:
@@ -113,6 +123,9 @@ class SnowflakeConnector(DatabaseConnector):
         qualified = f"{self.config.database}.{schema}.pipeline_events"
 
         return [
+            # Create schema and database if needed (ignore errors if they exist)
+            f"CREATE DATABASE IF NOT EXISTS {self.config.database}",
+            f"CREATE SCHEMA IF NOT EXISTS {self.config.database}.{schema}",
             f"""CREATE TABLE IF NOT EXISTS {qualified} (
                 pipeline_id VARCHAR(100),
                 pipeline_name VARCHAR(200),
@@ -121,14 +134,13 @@ class SnowflakeConnector(DatabaseConnector):
                 error_message TEXT,
                 rows_processed INT
             )""",
-            f"""INSERT INTO {qualified} VALUES
-                ('PL-FAIL-001', 'revenue-etl', 'FAILED', DATEADD(minute, -10, CURRENT_TIMESTAMP()), 'Connection timeout to upstream service', 0),
-                ('PL-FAIL-002', 'user-sync', 'FAILED', DATEADD(minute, -5, CURRENT_TIMESTAMP()), 'NULL constraint violation on user_id', 0),
-                ('PL-FAIL-003', 'order-processing', 'FAILED', DATEADD(minute, -2, CURRENT_TIMESTAMP()), 'Disk space exceeded', 0),
-                ('PL-STALE-001', 'inventory-sync', 'SUCCESS', DATEADD(minute, -90, CURRENT_TIMESTAMP()), NULL, 15234),
-                ('PL-STALE-002', 'analytics-daily', 'SUCCESS', DATEADD(minute, -120, CURRENT_TIMESTAMP()), NULL, 89012),
-                ('PL-OK-001', 'email-campaign', 'SUCCESS', DATEADD(minute, -3, CURRENT_TIMESTAMP()), NULL, 3456),
-                ('PL-OK-002', 'report-gen', 'SUCCESS', DATEADD(minute, -8, CURRENT_TIMESTAMP()), NULL, 7890)""",
+            f"INSERT INTO {qualified} SELECT 'PL-FAIL-001', 'revenue-etl', 'FAILED', DATEADD(minute, -10, CURRENT_TIMESTAMP()), 'Connection timeout to upstream service', 0",
+            f"INSERT INTO {qualified} SELECT 'PL-FAIL-002', 'user-sync', 'FAILED', DATEADD(minute, -5, CURRENT_TIMESTAMP()), 'NULL constraint violation on user_id', 0",
+            f"INSERT INTO {qualified} SELECT 'PL-FAIL-003', 'order-processing', 'FAILED', DATEADD(minute, -2, CURRENT_TIMESTAMP()), 'Disk space exceeded', 0",
+            f"INSERT INTO {qualified} SELECT 'PL-STALE-001', 'inventory-sync', 'SUCCESS', DATEADD(minute, -90, CURRENT_TIMESTAMP()), NULL, 15234",
+            f"INSERT INTO {qualified} SELECT 'PL-STALE-002', 'analytics-daily', 'SUCCESS', DATEADD(minute, -120, CURRENT_TIMESTAMP()), NULL, 89012",
+            f"INSERT INTO {qualified} SELECT 'PL-OK-001', 'email-campaign', 'SUCCESS', DATEADD(minute, -3, CURRENT_TIMESTAMP()), NULL, 3456",
+            f"INSERT INTO {qualified} SELECT 'PL-OK-002', 'report-gen', 'SUCCESS', DATEADD(minute, -8, CURRENT_TIMESTAMP()), NULL, 7890",
         ]
 
     def build_monitoring_queries(self, mapping: "TableMapping") -> dict[str, str]:
