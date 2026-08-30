@@ -300,108 +300,56 @@ export default function Connectors() {
 
       {/* Connection Form */}
       <form onSubmit={handleConnect} className="card" style={{ padding: '1.5rem' }}>
-        {/* Dynamic fields based on selected DB type */}
         {(() => {
           const db = DB_TYPES.find(d => d.id === selectedDb);
           const fields = db.fields;
-          const rows = [];
-          let i = 0;
           const inputStyle = { width: '100%', padding: '0.5rem 0.75rem', background: '#0a0a0a', border: '1px solid #333', borderRadius: '4px', color: '#e5e5e5', fontSize: '0.875rem' };
           const labelStyle = { display: 'block', fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' };
 
+          // Group fields into rows: half+half, third+third+third, rest single
+          const rowGroups = [];
+          let i = 0;
           while (i < fields.length) {
             const f = FIELD_DEFS[fields[i]];
-            // Check if next fields can share a row
-            if (f.half && i + 1 < fields.length && FIELD_DEFS[fields[i + 1]]?.half) {
-              rows.push(
-                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-                  {[fields[i], fields[i + 1]].map(fk => {
-                    const fd = FIELD_DEFS[fk];
-                    return (
-                      <div key={fk}>
-                        <label style={labelStyle}>{fd.label}{fd.required && ' *'}</label>
-                        <input
-                          type={fd.type}
-                          value={form[fk] || ''}
-                          onChange={e => setForm(frm => ({ ...frm, [fk]: fd.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value }))}
-                          placeholder={fd.placeholder}
-                          required={fd.required}
-                          min={fd.min}
-                          style={inputStyle}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              );
+            const next1 = i + 1 < fields.length ? FIELD_DEFS[fields[i + 1]] : null;
+            const next2 = i + 2 < fields.length ? FIELD_DEFS[fields[i + 2]] : null;
+
+            if (f.half && next1?.half) {
+              rowGroups.push({ type: 'half', fields: [fields[i], fields[i + 1]] });
               i += 2;
-            } else if (f.flex && i + 1 < fields.length && FIELD_DEFS[fields[i + 1]]?.flex) {
-              const cols = f.flex + FIELD_DEFS[fields[i + 1]].flex;
-              rows.push(
-                <div key={i} style={{ display: 'grid', gridTemplateColumns: `${f.flex}fr ${FIELD_DEFS[fields[i + 1]].flex}fr`, gap: '1rem', marginBottom: '1rem' }}>
-                  {[fields[i], fields[i + 1]].map(fk => {
-                    const fd = FIELD_DEFS[fk];
-                    return (
-                      <div key={fk}>
-                        <label style={labelStyle}>{fd.label}{fd.required && ' *'}</label>
-                        <input
-                          type={fd.type}
-                          value={form[fk] || ''}
-                          onChange={e => setForm(frm => ({ ...frm, [fk]: fd.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value }))}
-                          placeholder={fd.placeholder}
-                          required={fd.required}
-                          min={fd.min}
-                          style={inputStyle}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-              i += 2;
-            } else if (f.third && i + 2 < fields.length && FIELD_DEFS[fields[i + 1]]?.third && FIELD_DEFS[fields[i + 2]]?.third) {
-              rows.push(
-                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-                  {[fields[i], fields[i + 1], fields[i + 2]].map(fk => {
-                    const fd = FIELD_DEFS[fk];
-                    return (
-                      <div key={fk}>
-                        <label style={labelStyle}>{fd.label}{fd.required && ' *'}</label>
-                        <input
-                          type={fd.type}
-                          value={form[fk] || ''}
-                          onChange={e => setForm(frm => ({ ...frm, [fk]: fd.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value }))}
-                          placeholder={fd.placeholder}
-                          required={fd.required}
-                          min={fd.min}
-                          style={inputStyle}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              );
+            } else if (f.third && next1?.third && next2?.third) {
+              rowGroups.push({ type: 'third', fields: [fields[i], fields[i + 1], fields[i + 2]] });
               i += 3;
             } else {
-              // Single field, full width
-              rows.push(
-                <div key={i} style={{ marginBottom: '1rem' }}>
-                  <label style={labelStyle}>{f.label}{f.required && ' *'}</label>
-                  <input
-                    type={f.type}
-                    value={form[fields[i]] || ''}
-                    onChange={e => setForm(frm => ({ ...frm, [fields[i]]: f.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value }))}
-                    placeholder={f.placeholder}
-                    required={f.required}
-                    min={f.min}
-                    style={inputStyle}
-                  />
-                </div>
-              );
+              rowGroups.push({ type: 'single', fields: [fields[i]] });
               i += 1;
             }
           }
-          return rows;
+
+          return rowGroups.map((group, gi) => {
+            const cols = group.type === 'half' ? '1fr 1fr' : group.type === 'third' ? '1fr 1fr 1fr' : '1fr';
+            return (
+              <div key={gi} style={{ display: 'grid', gridTemplateColumns: cols, gap: '1rem', marginBottom: '1rem' }}>
+                {group.fields.map(fk => {
+                  const fd = FIELD_DEFS[fk];
+                  return (
+                    <div key={fk}>
+                      <label style={labelStyle}>{fd.label}{fd.required && ' *'}</label>
+                      <input
+                        type={fd.type}
+                        value={form[fk] || ''}
+                        onChange={e => setForm(frm => ({ ...frm, [fk]: fd.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value }))}
+                        placeholder={fd.placeholder}
+                        required={fd.required}
+                        min={fd.min}
+                        style={inputStyle}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          });
         })()}
 
         {error && (
