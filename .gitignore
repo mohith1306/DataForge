@@ -45,3 +45,4 @@ htmlcov/
 # Data
 *.db
 *.sqlite3
+data/connectors.json
