@@ -31,9 +31,12 @@ class TrueForgeRuntime:
         self._model_name = model_name
 
     async def ensure_agent(self) -> str:
-        """Ensure the DataForge investigator agent exists, return its ID."""
-        if self._agent_id:
-            return self._agent_id
+        """Ensure the DataForge investigator agent exists, return its ID.
+
+        If an existing agent is found, updates its manifest to match the
+        current spec (model, instructions, MCP servers, iteration limit).
+        """
+        desired_spec = get_investigator_spec(self._model_name)
 
         try:
             agents = await self.client.list_agents()
@@ -41,6 +44,15 @@ class TrueForgeRuntime:
                 if agent.get("name") == "dataforge-investigator":
                     self._agent_id = agent["id"]
                     logger.info(f"Found existing agent: {self._agent_id}")
+                    # Update manifest to ensure it matches current spec
+                    try:
+                        await self.client.update_agent(
+                            self._agent_id,
+                            {"manifest": desired_spec},
+                        )
+                        logger.info("Updated existing agent manifest")
+                    except TrueForgeError as e:
+                        logger.warning(f"Could not update agent manifest: {e}")
                     return self._agent_id
         except TrueForgeError as e:
             logger.warning(f"Could not list agents: {e}")
@@ -49,7 +61,7 @@ class TrueForgeRuntime:
         try:
             payload = {
                 "name": "dataforge-investigator",
-                "manifest": get_investigator_spec(self._model_name),
+                "manifest": desired_spec,
             }
             result = await self.client.create_agent(payload)
             self._agent_id = result.get("id")

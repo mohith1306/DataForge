@@ -90,6 +90,18 @@ class TrueForgeClient:
                 raise TrueForgeError(f"Get agent failed: {resp.status_code} {resp.text}")
             return resp.json()
 
+    async def update_agent(self, agent_id: str, payload: dict) -> dict:
+        """Update an existing agent's manifest."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.put(
+                f"{self.base_url}/api/v1/agents/{agent_id}",
+                headers=self._headers(),
+                json=payload,
+            )
+            if resp.status_code != 200:
+                raise TrueForgeError(f"Update agent failed: {resp.status_code} {resp.text}")
+            return resp.json()
+
     # ─── Sessions ────────────────────────────────────────────────────────────
 
     async def create_session(

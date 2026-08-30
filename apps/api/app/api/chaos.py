@@ -214,14 +214,18 @@ async def _start_trueforge_investigation(
         tool_count = 0
         poll_interval = 3.0
         retry_count = 0
+        start_time = asyncio.get_event_loop().time()
+        timeout_seconds = 480  # 8 minutes (with retries)
 
-        for _ in range(240):  # max 8 minutes (with retries)
+        while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
             await asyncio.sleep(poll_interval)
 
+            # Fetch events — failure should not block completion check (Bug 4 fix)
             try:
                 events = await tf.client.get_turn_events(session_id, turn_id)
-            except Exception:
-                continue
+            except Exception as exc:
+                logger.debug("Event fetch failed (non-fatal): %s", exc)
+                events = []
 
             for event in events:
                 event_id = event.get("id", event.get("type", str(event)))
@@ -274,10 +278,13 @@ async def _start_trueforge_investigation(
                                 })
                                 await asyncio.sleep(wait_sec)
                                 try:
-                                    await tf.client.create_turn(
+                                    retry_turn = await tf.client.create_turn(
                                         session_id=session_id,
                                         message="Continue the investigation.",
                                     )
+                                    if retry_turn.get("id"):
+                                        turn_id = retry_turn["id"]
+                                        seen_events.clear()
                                     poll_interval = 2.0
                                     continue
                                 except Exception:
@@ -293,10 +300,13 @@ async def _start_trueforge_investigation(
                                 })
                                 await asyncio.sleep(30)
                                 try:
-                                    await tf.client.create_turn(
+                                    retry_turn = await tf.client.create_turn(
                                         session_id=session_id,
                                         message="Context overflow detected. Please summarize your findings so far and continue with a focused investigation.",
                                     )
+                                    if retry_turn.get("id"):
+                                        turn_id = retry_turn["id"]
+                                        seen_events.clear()
                                     poll_interval = 2.0
                                     continue
                                 except Exception:
@@ -311,10 +321,13 @@ async def _start_trueforge_investigation(
                                 })
                                 await asyncio.sleep(10)
                                 try:
-                                    await tf.client.create_turn(
+                                    retry_turn = await tf.client.create_turn(
                                         session_id=session_id,
                                         message="Continue the investigation.",
                                     )
+                                    if retry_turn.get("id"):
+                                        turn_id = retry_turn["id"]
+                                        seen_events.clear()
                                     poll_interval = 2.0
                                     continue
                                 except Exception:
@@ -345,10 +358,11 @@ async def _start_trueforge_investigation(
                 poll_interval = 2.0
 
         # Timeout
+        elapsed = int(asyncio.get_event_loop().time() - start_time)
         await _set_incident_status(incident_id, "failed")
         await publish_event(incident_id, {
             "type": "investigation.error",
-            "data": {"message": "Investigation timed out after 8 minutes"},
+            "data": {"message": f"Investigation timed out after {elapsed}s"},
         })
 
     except Exception as e:

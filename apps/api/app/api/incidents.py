@@ -227,14 +227,18 @@ async def _run_trueforge_investigation(
         tool_count = 0
         poll_interval = 3.0
         retry_count = 0
+        start_time = asyncio.get_event_loop().time()
+        timeout_seconds = 300  # 5 minutes
 
-        for _ in range(120):
+        while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
             await asyncio.sleep(poll_interval)
 
+            # Fetch events — failure should not block completion check (Bug 4 fix)
             try:
                 events = await tf.client.get_turn_events(session_id, turn_id)
-            except Exception:
-                continue
+            except Exception as exc:
+                logger.debug("Event fetch failed (non-fatal): %s", exc)
+                events = []
 
             for event in events:
                 event_id = event.get("id", event.get("type", str(event)))
@@ -277,7 +281,7 @@ async def _run_trueforge_investigation(
                         error_msg = turn_data.get("state", {}).get("message", "Unknown error")
                         # Handle rate limits (429) — wait and retry
                         if "429" in error_msg or "rate" in error_msg.lower():
-                            retry_count = retry_count + 1 if 'retry_count' in dir() else 1
+                            retry_count += 1
                             if retry_count <= 3:
                                 wait_sec = 90 * retry_count
                                 await publish_event(incident_id, {
@@ -286,10 +290,13 @@ async def _run_trueforge_investigation(
                                 })
                                 await asyncio.sleep(wait_sec)
                                 try:
-                                    await tf.client.create_turn(
+                                    retry_turn = await tf.client.create_turn(
                                         session_id=session_id,
                                         message="Continue the investigation.",
                                     )
+                                    if retry_turn.get("id"):
+                                        turn_id = retry_turn["id"]
+                                        seen_events.clear()
                                     poll_interval = 2.0
                                     continue
                                 except Exception:
@@ -297,7 +304,7 @@ async def _run_trueforge_investigation(
                         # Handle context overflow — summarize and continue
                         elif any(kw in error_msg.lower() for kw in
                                  ("context_length", "token", "too long", "max_tokens")):
-                            retry_count = retry_count + 1 if 'retry_count' in dir() else 1
+                            retry_count += 1
                             if retry_count <= 2:
                                 await publish_event(incident_id, {
                                     "type": "investigation.retry",
@@ -305,17 +312,20 @@ async def _run_trueforge_investigation(
                                 })
                                 await asyncio.sleep(30)
                                 try:
-                                    await tf.client.create_turn(
+                                    retry_turn = await tf.client.create_turn(
                                         session_id=session_id,
                                         message="Context overflow detected. Please summarize your findings so far and continue with a focused investigation.",
                                     )
+                                    if retry_turn.get("id"):
+                                        turn_id = retry_turn["id"]
+                                        seen_events.clear()
                                     poll_interval = 2.0
                                     continue
                                 except Exception:
                                     pass
                         # Handle stream abort — retry once
                         elif "abort" in error_msg.lower() or "stream" in error_msg.lower():
-                            retry_count = retry_count + 1 if 'retry_count' in dir() else 1
+                            retry_count += 1
                             if retry_count <= 2:
                                 await publish_event(incident_id, {
                                     "type": "investigation.retry",
@@ -323,10 +333,13 @@ async def _run_trueforge_investigation(
                                 })
                                 await asyncio.sleep(10)
                                 try:
-                                    await tf.client.create_turn(
+                                    retry_turn = await tf.client.create_turn(
                                         session_id=session_id,
                                         message="Continue the investigation.",
                                     )
+                                    if retry_turn.get("id"):
+                                        turn_id = retry_turn["id"]
+                                        seen_events.clear()
                                     poll_interval = 2.0
                                     continue
                                 except Exception:
@@ -355,10 +368,11 @@ async def _run_trueforge_investigation(
             if tool_count > 0:
                 poll_interval = 2.0
 
+        elapsed = int(asyncio.get_event_loop().time() - start_time)
         await _set_incident_status(incident_id, "failed")
         await publish_event(incident_id, {
             "type": "investigation.error",
-            "data": {"message": "Investigation timed out after 2 minutes"},
+            "data": {"message": f"Investigation timed out after {elapsed}s"},
         })
 
     except Exception as e:
