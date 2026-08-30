@@ -88,6 +88,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)) -> dict:
 async def list_incidents(
     status: str | None = None,
     severity: str | None = None,
+    connector_id: str | None = None,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
 ) -> list[Incident]:
@@ -100,6 +101,8 @@ async def list_incidents(
         query = query.where(Incident.status == status)
     if severity:
         query = query.where(Incident.severity == severity)
+    if connector_id:
+        query = query.where(Incident.connector_id == connector_id)
     result = await db.execute(query)
     return list(result.scalars().all())
 

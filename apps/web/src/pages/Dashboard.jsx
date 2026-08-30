@@ -138,7 +138,7 @@ export default function Dashboard() {
           const totalIssues = result
             ? (result.failures?.length || 0) + (result.stale?.length || 0) + (result.quality_issues?.length || 0)
             : null;
-          const dbIncidents = allIncidents;  // Show all incidents (can filter by connector later)
+          const dbIncidents = allIncidents.filter(inc => inc.connector_id === conn.id);
 
           return (
             <div key={conn.id} className="card" style={{ marginBottom: '1.5rem' }}>

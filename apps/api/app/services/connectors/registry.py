@@ -296,6 +296,7 @@ class ConnectorRegistry:
                 ),
                 severity="high",
                 incident_type="pipeline_failure",
+                connector_id=connector_id,
             )
             if inc_id and settings.trueforge_enabled:
                 await _start_investigation(inc_id)
@@ -309,6 +310,7 @@ class ConnectorRegistry:
                 ),
                 severity="medium",
                 incident_type="freshness_lag",
+                connector_id=connector_id,
             )
             if inc_id and settings.trueforge_enabled:
                 await _start_investigation(inc_id)
@@ -327,6 +329,7 @@ class ConnectorRegistry:
                     ),
                     severity="medium",
                     incident_type="data_quality",
+                    connector_id=connector_id,
                 )
                 if inc_id and settings.trueforge_enabled:
                     await _start_investigation(inc_id)

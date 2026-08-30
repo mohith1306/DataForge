@@ -79,6 +79,7 @@ async def _create_incident(
     description: str,
     severity: str,
     incident_type: str,
+    connector_id: str | None = None,
 ) -> str | None:
     """Insert an Incident + event row, return the incident id."""
     try:
@@ -90,6 +91,7 @@ async def _create_incident(
                     severity=severity,
                     status="created",
                     incident_type=incident_type,
+                    connector_id=connector_id,
                 )
                 db.add(inc)
                 await db.flush()

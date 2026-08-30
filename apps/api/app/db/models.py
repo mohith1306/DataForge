@@ -19,6 +19,7 @@ class Incident(Base):
     severity = Column(String(20), nullable=False, default="medium")
     status = Column(String(30), nullable=False, default="created")
     incident_type = Column(String(50))
+    connector_id = Column(String(100))  # Which database connector created this
     trueforge_session_id = Column(String(100))
     verification_result = Column(Text)  # Gap 10: JSON verification result
     created_at = Column(DateTime(timezone=True), server_default=func.now())

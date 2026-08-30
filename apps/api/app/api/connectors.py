@@ -111,6 +111,7 @@ async def test_connector(connector_id: str):
 async def run_check(connector_id: str):
     """Run a single monitoring check for a connector."""
     result = await registry.run_monitoring_check(connector_id)
+    await registry._handle_results(connector_id, result)
     return result
 
 

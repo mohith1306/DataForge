@@ -22,7 +22,7 @@ export default function DatabaseDetail() {
     try {
       const [conn, inc] = await Promise.all([
         getConnector(id),
-        fetchIncidents(),
+        fetchIncidents({ connector_id: id }),
       ]);
       setConnector(conn);
       setIncidents(inc);
