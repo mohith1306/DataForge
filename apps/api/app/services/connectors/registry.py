@@ -181,13 +181,14 @@ class ConnectorRegistry:
 
         connected = await connector.connect()
         if not connected:
-            return {"status": "error", "message": "Connection failed"}
+            err = getattr(connector, '_last_error', 'Connection failed')
+            return {"status": "error", "message": err}
 
         try:
             tables = await connector.list_tables()
             return {"status": "connected", "tables": len(tables), "sample": tables[:10]}
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": f"Connected but query failed: {e}"}
 
     async def run_monitoring_check(self, connector_id: str) -> dict:
         """Run a single monitoring check for a connector."""

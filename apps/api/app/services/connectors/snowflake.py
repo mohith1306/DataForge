@@ -76,11 +76,22 @@ class SnowflakeConnector(DatabaseConnector):
 
     async def list_tables(self, schema: str | None = None) -> list[str]:
         schema = schema or self.config.schema or "PUBLIC"
-        rows = self._execute_sync(
-            f"SHOW TABLES IN SCHEMA {self.config.database}.{schema}"
-        )
-        # Snowflake SHOW returns 'name' column
-        return [r.get("name", r.get("Name", "")) for r in rows]
+        try:
+            rows = self._execute_sync(
+                f"SHOW TABLES IN SCHEMA {self.config.database}.{schema}"
+            )
+            return [r.get("name", r.get("Name", "")) for r in rows]
+        except Exception as e:
+            # Schema might not exist or no tables — try listing all tables in database
+            logger.warning("SHOW TABLES IN SCHEMA failed: %s, trying DATABASE level", e)
+            try:
+                rows = self._execute_sync(
+                    f"SHOW TABLES IN DATABASE {self.config.database}"
+                )
+                return [r.get("name", r.get("Name", "")) for r in rows]
+            except Exception as e2:
+                logger.warning("SHOW TABLES IN DATABASE also failed: %s", e2)
+                return []
 
     async def describe_table(self, table: str, schema: str | None = None) -> list[dict]:
         schema = schema or self.config.schema or "PUBLIC"
