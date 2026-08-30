@@ -134,7 +134,9 @@ export default function Connectors() {
       setShowForm(false);
       loadConnectors();
     } catch (err) {
-      setError(err.message || 'Connection failed');
+      console.error('[Connectors] Error:', err);
+      const msg = err?.message || err?.detail || (typeof err === 'string' ? err : 'Connection failed');
+      setError(String(msg));
     } finally {
       setConnecting(false);
     }

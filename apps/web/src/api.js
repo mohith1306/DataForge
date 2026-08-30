@@ -20,7 +20,7 @@ export async function addConnector(data) {
   console.log('[API] Response:', res.status);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || 'Connection failed');
+    throw new Error(err.detail || err.message || 'Connection failed');
   }
   return res.json();
 }
