@@ -20,15 +20,21 @@ class SnowflakeConnector(DatabaseConnector):
     async def connect(self) -> bool:
         try:
             import snowflake.connector
+
+            # Strip .snowflakecomputing.com from account if user provided full URL
+            account = self.config.host
+            if ".snowflakecomputing.com" in account:
+                account = account.split(".snowflakecomputing.com")[0]
+
             self._connection = snowflake.connector.connect(
-                account=self.config.host,
+                account=account,
                 user=self.config.username,
                 password=self.config.password,
                 database=self.config.database,
                 schema=self.config.schema or "PUBLIC",
                 warehouse=self.config.extra.get("warehouse", "COMPUTE_WH"),
                 role=self.config.extra.get("role", "SYSADMIN"),
-                login_timeout=10,
+                login_timeout=15,
             )
             # Test
             cursor = self._connection.cursor()
