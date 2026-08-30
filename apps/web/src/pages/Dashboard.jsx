@@ -238,27 +238,60 @@ export default function Dashboard() {
                   ))}
                 </div>
               )}
+
+              {/* Incidents for this database */}
+              {dbIncidents.length > 0 && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#ccc', marginBottom: '0.5rem' }}>
+                    Incidents ({dbIncidents.length})
+                  </div>
+                  <div className="incident-list">
+                    {dbIncidents.slice(0, 5).map(inc => (
+                      <Link
+                        key={inc.id}
+                        to={`/incidents/${inc.id}`}
+                        className="incident-row"
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', textDecoration: 'none', color: 'inherit' }}
+                      >
+                        <div className="incident-main">
+                          <span className="severity-dot" style={{ background: SEVERITY_COLORS[inc.severity] || '#666' }} />
+                          <div>
+                            <div className="incident-title">{inc.title}</div>
+                            <div className="incident-meta">
+                              {inc.incident_type && <span className="incident-type">{inc.incident_type}</span>}
+                              <span>{new Date(inc.created_at).toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <span className="badge" style={{ background: `${STATUS_COLORS[inc.status] || '#666'}20`, color: STATUS_COLORS[inc.status] || '#666', fontSize: '0.7rem' }}>
+                          {inc.status}
+                        </span>
+                      </Link>
+                    ))}
+                    {dbIncidents.length > 5 && (
+                      <div
+                        style={{ fontSize: '0.75rem', color: '#8b5cf6', cursor: 'pointer', padding: '0.375rem 0' }}
+                        onClick={() => navigate(`/databases/${conn.id}`)}
+                      >
+                        +{dbIncidents.length - 5} more incidents →
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           );
         })
       )}
 
-      {/* All Incidents */}
-      {allIncidents.length > 0 && (
+      {/* Incidents from monitor (no connector_id) */}
+      {allIncidents.filter(inc => !inc.connector_id).length > 0 && (
         <div className="card" style={{ marginTop: '1.5rem' }}>
           <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>All Incidents</span>
-            <button
-              className="btn btn-primary"
-              style={{ padding: '0.375rem 0.75rem', fontSize: '0.8rem' }}
-              onClick={handleCreateIncident}
-              disabled={creating}
-            >
-              {creating ? 'Creating...' : '+ New Incident'}
-            </button>
+            <span>Monitor Incidents</span>
           </div>
           <div className="incident-list">
-            {allIncidents.slice(0, 10).map(inc => (
+            {allIncidents.filter(inc => !inc.connector_id).slice(0, 10).map(inc => (
               <div key={inc.id} className="incident-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Link
                   to={`/incidents/${inc.id}`}
