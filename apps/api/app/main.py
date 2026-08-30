@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     # Auto-start monitoring for all enabled connectors
     from apps.api.app.services.connectors.registry import registry
     for conn in registry.list_connectors():
-        if conn.get("enabled") and conn.get("discovered_tables"):
+        if conn.get("enabled"):
             await registry.start_monitoring(conn["id"])
 
     yield
