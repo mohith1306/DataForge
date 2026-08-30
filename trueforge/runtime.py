@@ -72,76 +72,61 @@ class TrueForgeRuntime:
             raise
 
     async def _prefetch_data(self, description: str) -> str:
-        """Pre-fetch pipeline data from ClickHouse for the investigation."""
-        import httpx
-        import os
+        """Pre-fetch pipeline data from the configured database for the investigation.
 
-        ch_host = os.getenv("CLICKHOUSE_HOST", "localhost")
-        ch_port = os.getenv("CLICKHOUSE_PORT", "8123")
-        ch_db = os.getenv("CLICKHOUSE_DATABASE", "dataforge")
-        base_url = f"http://{ch_host}:{ch_port}"
+        Uses the same adapter as the monitor, so it works with ClickHouse,
+        PostgreSQL, or custom backends.
+        """
+        from apps.api.app.services.db_adapter import create_monitor_adapter
 
+        adapter = create_monitor_adapter()
         sections = []
 
-        # 1. Pipeline status
+        # 1. Pipeline status (recent failures)
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    f"{base_url}/",
-                    params={"database": ch_db, "query_format": "JSONEachRow"},
-                    content="SELECT pipeline_id, pipeline_name, status, started_at, finished_at, rows_processed, error_message FROM dataforge.pipeline_runs ORDER BY started_at DESC LIMIT 20",
-                )
-                rows = [json.loads(line) for line in resp.text.strip().split("\n") if line]
-                sections.append("### Pipeline Status (recent runs)")
-                for r in rows:
+            failures = await adapter.check_pipeline_failures(lookback_seconds=3600)
+            sections.append("### Pipeline Status (recent runs)")
+            if failures:
+                for r in failures:
                     sections.append(
                         f"- {r.get('pipeline_name','?')} ({r.get('pipeline_id','?')}): "
                         f"{r.get('status','?')} | started: {r.get('started_at','?')} | "
-                        f"rows: {r.get('rows_processed',0)} | error: {str(r.get('error_message',''))[:200]}"
+                        f"error: {str(r.get('error_message',''))[:200]}"
                     )
+            else:
+                sections.append("- No recent failures found")
         except Exception as e:
             sections.append(f"### Pipeline Status\nError fetching: {e}")
 
-        # 2. Data freshness
+        # 2. Pipeline freshness
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    f"{base_url}/",
-                    params={"database": ch_db, "query_format": "JSONEachRow"},
-                    content="SELECT pipeline_id, pipeline_name, last_successful_run, freshness_threshold_minutes FROM dataforge.pipeline_freshness ORDER BY last_successful_run ASC LIMIT 10",
-                )
-                rows = [json.loads(line) for line in resp.text.strip().split("\n") if line]
-                sections.append("\n### Data Freshness")
-                for r in rows:
+            stale = await adapter.check_pipeline_freshness(stale_minutes=120)
+            sections.append("\n### Data Freshness (stale pipelines)")
+            if stale:
+                for r in stale:
                     sections.append(
                         f"- {r.get('pipeline_name','?')} ({r.get('pipeline_id','?')}): "
-                        f"last run: {r.get('last_successful_run','?')} | "
-                        f"threshold: {r.get('freshness_threshold_minutes',0)} min"
+                        f"last run: {r.get('last_run','?')}"
                     )
+            else:
+                sections.append("- No stale pipelines")
         except Exception as e:
             sections.append(f"\n### Data Freshness\nError fetching: {e}")
 
         # 3. Data quality checks
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    f"{base_url}/",
-                    params={"database": ch_db, "query_format": "JSONEachRow"},
-                    content="SELECT check_name, status, failed_records, total_records, severity FROM dataforge.data_quality_checks WHERE status = 'FAIL' ORDER BY severity DESC LIMIT 10",
-                )
-                rows = [json.loads(line) for line in resp.text.strip().split("\n") if line]
-                if rows:
-                    sections.append("\n### Failed Data Quality Checks")
-                    for r in rows:
-                        sections.append(
-                            f"- {r.get('check_name','?')}: {r.get('status','?')} | "
-                            f"failed: {r.get('failed_records',0)}/{r.get('total_records',0)} | "
-                            f"severity: {r.get('severity','?')}"
-                        )
-                else:
-                    sections.append("\n### Data Quality Checks\nNo failed checks.")
+            dq = await adapter.check_data_quality()
+            if dq:
+                sections.append("\n### Failed Data Quality Checks")
+                for r in dq:
+                    sections.append(
+                        f"- {r.get('table','?')}.{r.get('column','?')}: "
+                        f"null_rate={r.get('null_rate',0):.1%} (threshold: {r.get('threshold',0):.0%})"
+                    )
+            else:
+                sections.append("\n### Data Quality\nAll checks passing.")
         except Exception as e:
-            sections.append(f"\n### Data Quality Checks\nError fetching: {e}")
+            sections.append(f"\n### Data Quality\nError fetching: {e}")
 
         # 4. Recent commits
         try:

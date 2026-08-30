@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     # Gap 9: Demo mode — remediation targets controlled/test resources
     dataforge_env: str = "demo"  # "demo" or "production"
 
+    # Monitor database backend (clickhouse | postgres | custom)
+    monitor_db_type: str = "clickhouse"
+    monitor_db_url: str = ""          # For postgres: postgres://user:pass@host/db
+    monitor_db_schema: str = "public" # For postgres: schema name
+    monitor_custom_query_url: str = ""  # For custom: HTTP query endpoint
+    monitor_custom_auth_header: str = ""  # For custom: Authorization header
+    monitor_queries_json: str = "{}"  # For custom: JSON mapping check_name → SQL
+
     class Config:
         env_file = ".env"
 

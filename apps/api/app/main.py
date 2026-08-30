@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.app.api.chaos import router as chaos_router
+from apps.api.app.api.database import router as database_router
 from apps.api.app.api.events import router as events_router
 from apps.api.app.api.health import router as health_router
 from apps.api.app.api.incidents import router as incidents_router
@@ -47,6 +48,7 @@ app.include_router(events_router, prefix="/api")
 app.include_router(stream_router, prefix="/api")
 app.include_router(chaos_router, prefix="/api")
 app.include_router(monitor_router, prefix="/api")
+app.include_router(database_router, prefix="/api")
 
 
 @app.get("/")
