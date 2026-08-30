@@ -213,7 +213,10 @@ export default function Connectors() {
                   <div>
                     <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{conn.name}</div>
                     <div style={{ color: '#888', fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                      {conn.db_type} · {conn.db_type === 'databricks' ? conn.host : `${conn.host}:${conn.port}`}{conn.database ? `/${conn.database}` : ''}
+                      {conn.db_type === 'databricks'
+                        ? `${conn.host} · catalog: ${conn.database}`
+                        : `${conn.db_type} · ${conn.host}:${conn.port}${conn.database ? `/${conn.database}` : ''}`
+                      }
                     </div>
                     <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
                       <span className={`badge ${conn.monitoring ? 'badge-resolved' : 'badge-created'}`}>
