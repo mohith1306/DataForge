@@ -1,7 +1,7 @@
 """TrueForge agent definitions for DataForge."""
 
 
-def get_investigator_spec(model_name: str = "google/gemini-3.1-flash-lite") -> dict:
+def get_investigator_spec(model_name: str = "google/gemini-2.0-flash") -> dict:
     """Return the DataForge investigator agent spec."""
     return {
         "model": {

@@ -7,6 +7,7 @@ from apps.api.app.api.chaos import router as chaos_router
 from apps.api.app.api.events import router as events_router
 from apps.api.app.api.health import router as health_router
 from apps.api.app.api.incidents import router as incidents_router
+from apps.api.app.api.monitor import router as monitor_router
 from apps.api.app.api.stream import router as stream_router
 from apps.api.app.core.config import settings
 from apps.api.app.core.logging import setup_logging
@@ -17,7 +18,12 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     setup_logging()
     from apps.api.app.db.session import ensure_schema
     await ensure_schema()
+
+    # Auto-start background monitor
+    from apps.api.app.services import monitor
+    monitor.start(interval=30)
     yield
+    monitor.stop()
 
 
 app = FastAPI(
@@ -40,6 +46,7 @@ app.include_router(incidents_router, prefix="/api")
 app.include_router(events_router, prefix="/api")
 app.include_router(stream_router, prefix="/api")
 app.include_router(chaos_router, prefix="/api")
+app.include_router(monitor_router, prefix="/api")
 
 
 @app.get("/")
