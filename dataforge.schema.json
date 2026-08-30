@@ -1,0 +1,18 @@
+{
+  "pipeline_table": "pipeline_events",
+  "pipeline_columns": {
+    "pipeline_id": "pipeline_id",
+    "pipeline_name": "pipeline_name",
+    "status": "status",
+    "started_at": "started_at",
+    "error_message": "error_message"
+  },
+  "quality_table": "customer_orders",
+  "quality_columns": {
+    "null_check_column": "customer_region"
+  },
+  "status_values": {
+    "failed": "FAILED",
+    "success": "SUCCESS"
+  }
+}

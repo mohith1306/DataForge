@@ -51,7 +51,7 @@ const FIELD_DEFS = {
   workspace_url:  { label: 'Workspace URL', placeholder: 'https://dbc-xxx.cloud.databricks.com', type: 'text', required: true, flex: 2 },
   http_path:      { label: 'HTTP Path', placeholder: '/sql/1.0/warehouses/xxx', type: 'text', required: true, flex: 2 },
   catalog:        { label: 'Catalog', placeholder: 'hive_metastore', type: 'text', required: true, half: true },
-  token:          { label: 'Access Token', placeholder: 'dapi...', type: 'password', required: true, half: true },
+  token:          { label: 'Access Token', placeholder: 'your-token-here', type: 'password', required: true, half: true },
 };
 
 export default function Connectors() {
@@ -191,7 +191,7 @@ export default function Connectors() {
             </p>
           </div>
           <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <button className="btn btn-primary" onClick={() => navigate('/')}>
+            <button className="btn btn-primary" onClick={() => navigate('/dashboard')}>
               View Dashboard
             </button>
             <button className="btn btn-primary" style={{ background: '#22c55e' }} onClick={() => setShowForm(true)}>

@@ -56,17 +56,16 @@ class DatabricksConnector(DatabaseConnector):
                     },
                 )
                 logger.info("Databricks response: %d %s", resp.status_code, resp.text[:200])
-                if resp.status_code in (200, 400):
+                if resp.status_code == 200:
                     logger.info("Connected to Databricks: %s", self._host)
                     return True
-                # Parse Databricks error message
+                # 400 = client error (bad warehouse ID, auth, malformed request) — NOT success
                 try:
                     err = resp.json()
                     msg = err.get("message", resp.text[:200])
                 except Exception:
                     msg = resp.text[:200]
                 logger.warning("Databricks connect failed: %d %s", resp.status_code, msg)
-                # Store error message for caller
                 self._last_error = f"HTTP {resp.status_code}: {msg}"
                 return False
         except httpx.ConnectError as e:

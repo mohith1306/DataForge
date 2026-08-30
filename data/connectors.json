@@ -1,0 +1,65 @@
+{
+  "conn_55cbbe40d532": {
+    "id": "conn_55cbbe40d532",
+    "name": "Demo ClickHouse",
+    "db_type": "clickhouse",
+    "host": "localhost",
+    "port": 8123,
+    "database": "dataforge",
+    "username": "default",
+    "password": "",
+    "schema": "dataforge",
+    "extra": {},
+    "enabled": true,
+    "poll_interval": 60,
+    "discovered_tables": [
+      {
+        "table": "pipeline_events",
+        "type": "pipeline",
+        "columns": {
+          "pipeline_id": "pipeline_id",
+          "pipeline_name": "pipeline_name",
+          "status": "status",
+          "started_at": "started_at",
+          "error_message": "error_message",
+          "rows_processed": "rows_processed"
+        },
+        "row_count": 219,
+        "confidence": 0.8999999999999999
+      }
+    ]
+  },
+  "conn_6173ea923646": {
+    "id": "conn_6173ea923646",
+    "name": "DB",
+    "db_type": "snowflake",
+    "host": "FNKPDEP-ZS20579",
+    "port": 443,
+    "database": "DATAFORGE",
+    "username": "Mohith",
+    "password": "V7mKqR2tLpNxZaBc",
+    "schema": "PUBLIC",
+    "extra": {
+      "warehouse": "COMPUTE_WH",
+      "role": "SYSADMIN"
+    },
+    "enabled": true,
+    "poll_interval": 30,
+    "discovered_tables": [
+      {
+        "table": "PIPELINE_EVENTS",
+        "type": "pipeline",
+        "columns": {
+          "pipeline_id": "pipeline_id",
+          "pipeline_name": "pipeline_name",
+          "status": "status",
+          "started_at": "started_at",
+          "error_message": "error_message",
+          "rows_processed": "rows_processed"
+        },
+        "row_count": 7,
+        "confidence": 0.8999999999999999
+      }
+    ]
+  }
+}

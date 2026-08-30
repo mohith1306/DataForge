@@ -77,12 +77,13 @@ def generate_create_table_sql(db_type: str = "clickhouse") -> dict[str, str]:
     """Generate CREATE TABLE SQL for the user's target database."""
     schema = load_schema()
     pt = schema["pipeline_table"]
-    qt = schema["quality_table"]
+    qt = schema.get("quality_table", "")
     pc = schema["pipeline_columns"]
 
+    tables = {}
+
     if db_type == "clickhouse":
-        return {
-            pt: f"""
+        tables[pt] = f"""
 CREATE TABLE IF NOT EXISTS {pt} (
     {pc['pipeline_id']} String,
     {pc['pipeline_name']} String,
@@ -90,42 +91,46 @@ CREATE TABLE IF NOT EXISTS {pt} (
     {pc['started_at']} DateTime,
     {pc.get('error_message', 'error_message')} Nullable(String)
 ) ENGINE = MergeTree()
-ORDER BY ({pc['started_at']}, {pc['pipeline_id']})""",
-            qt: f"""
+ORDER BY ({pc['started_at']}, {pc['pipeline_id']})"""
+
+        if qt and schema.get("quality_columns", {}).get("null_check_column"):
+            ncc = schema["quality_columns"]["null_check_column"]
+            tables[qt] = f"""
 CREATE TABLE IF NOT EXISTS {qt} (
     order_id String,
     customer_id String,
-    {schema['quality_columns']['null_check_column']} String,
+    {ncc} String,
     product_line String,
     order_date DateTime,
     amount Float64,
     status String
 ) ENGINE = MergeTree()
-ORDER BY (order_date)""",
-        }
+ORDER BY (order_date)"""
+
     elif db_type == "postgres":
-        return {
-            pt: f"""
+        tables[pt] = f"""
 CREATE TABLE IF NOT EXISTS {pt} (
     {pc['pipeline_id']} VARCHAR(100),
     {pc['pipeline_name']} VARCHAR(200),
     {pc['status']} VARCHAR(20),
     {pc['started_at']} TIMESTAMP,
     {pc.get('error_message', 'error_message')} TEXT
-);""",
-            qt: f"""
+);"""
+
+        if qt and schema.get("quality_columns", {}).get("null_check_column"):
+            ncc = schema["quality_columns"]["null_check_column"]
+            tables[qt] = f"""
 CREATE TABLE IF NOT EXISTS {qt} (
     order_id VARCHAR(100),
     customer_id VARCHAR(100),
-    {schema['quality_columns']['null_check_column']} VARCHAR(100),
+    {ncc} VARCHAR(100),
     product_line VARCHAR(100),
     order_date TIMESTAMP,
     amount DECIMAL(10,2),
     status VARCHAR(20)
-);""",
-        }
-    else:
-        return {}
+);"""
+
+    return tables
 
 
 def generate_monitor_sql(db_type: str = "clickhouse") -> dict[str, str]:
@@ -135,41 +140,48 @@ def generate_monitor_sql(db_type: str = "clickhouse") -> dict[str, str]:
     pc = schema["pipeline_columns"]
     failed = schema["status_values"]["failed"]
 
+    queries = {}
+
     if db_type == "clickhouse":
-        return {
-            "pipeline_failures": f"""
+        queries["pipeline_failures"] = f"""
 SELECT {pc['pipeline_id']}, {pc['pipeline_name']}, {pc['status']}, {pc['started_at']}, {pc.get('error_message','error_message')}
 FROM {pt}
 WHERE {pc['status']} = '{failed}'
 AND {pc['started_at']} >= now() - INTERVAL {{{{lookback_seconds}}}} SECOND
-ORDER BY {pc['started_at']} DESC LIMIT 20""",
-            "pipeline_freshness": f"""
+ORDER BY {pc['started_at']} DESC LIMIT 20"""
+        queries["pipeline_freshness"] = f"""
 SELECT {pc['pipeline_id']}, {pc['pipeline_name']}, max({pc['started_at']}) as last_run
 FROM {pt}
 GROUP BY {pc['pipeline_id']}, {pc['pipeline_name']}
 HAVING last_run < now() - INTERVAL {{{{stale_minutes}}}} MINUTE
-ORDER BY last_run ASC""",
-            "data_quality": f"""
-SELECT countIf({schema['quality_columns']['null_check_column']} IS NULL) as nulls, count() as total
-FROM {schema['quality_table']}""",
-        }
+ORDER BY last_run ASC"""
+
+        qt = schema.get("quality_table", "")
+        ncc = schema.get("quality_columns", {}).get("null_check_column", "")
+        if qt and ncc:
+            queries["data_quality"] = f"""
+SELECT countIf({ncc} IS NULL) as nulls, count() as total
+FROM {qt}"""
+
     elif db_type == "postgres":
-        return {
-            "pipeline_failures": f"""
+        queries["pipeline_failures"] = f"""
 SELECT {pc['pipeline_id']}, {pc['pipeline_name']}, {pc['status']}, {pc['started_at']}, {pc.get('error_message','error_message')}
 FROM {pt}
 WHERE {pc['status']} = '{failed}'
 AND {pc['started_at']} >= now() - interval '{{{{lookback_seconds}}}} seconds'
-ORDER BY {pc['started_at']} DESC LIMIT 20""",
-            "pipeline_freshness": f"""
+ORDER BY {pc['started_at']} DESC LIMIT 20"""
+        queries["pipeline_freshness"] = f"""
 SELECT {pc['pipeline_id']}, {pc['pipeline_name']}, max({pc['started_at']}) as last_run
 FROM {pt}
 GROUP BY {pc['pipeline_id']}, {pc['pipeline_name']}
 HAVING max({pc['started_at']}) < now() - interval '{{{{stale_minutes}}}} minutes'
-ORDER BY last_run ASC""",
-            "data_quality": f"""
-SELECT count(*) FILTER (WHERE {schema['quality_columns']['null_check_column']} IS NULL) as nulls, count(*) as total
-FROM {schema['quality_table']}""",
-        }
-    else:
-        return {}
+ORDER BY last_run ASC"""
+
+        qt = schema.get("quality_table", "")
+        ncc = schema.get("quality_columns", {}).get("null_check_column", "")
+        if qt and ncc:
+            queries["data_quality"] = f"""
+SELECT count(*) FILTER (WHERE {ncc} IS NULL) as nulls, count(*) as total
+FROM {qt}"""
+
+    return queries

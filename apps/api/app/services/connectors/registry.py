@@ -100,6 +100,7 @@ class ConnectorRegistry:
             return {"status": "error", "message": f"Could not connect to {config.db_type} at {host}: {err}"}
 
         # Auto-discover tables
+        mappings = []
         try:
             mappings = await connector.auto_discover()
             config.discovered_tables = [
@@ -135,20 +136,25 @@ class ConnectorRegistry:
         }
 
     async def remove_connector(self, connector_id: str) -> bool:
-        """Remove a connector and stop its monitoring."""
+        """Remove a connector and stop its monitoring. Returns False if not found."""
+        existed = False
+
         if connector_id in self._tasks:
             self._tasks[connector_id].cancel()
             del self._tasks[connector_id]
+            existed = True
 
         if connector_id in self._connectors:
             await self._connectors[connector_id].disconnect()
             del self._connectors[connector_id]
+            existed = True
 
         if connector_id in self._configs:
             del self._configs[connector_id]
             self._save()
+            existed = True
 
-        return True
+        return existed
 
     def list_connectors(self) -> list[dict]:
         """List all connectors (without passwords)."""

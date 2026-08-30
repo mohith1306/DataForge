@@ -201,7 +201,7 @@ def _create_sandbox_script(code: str, context: dict[str, Any] | None = None) -> 
     4. Executes the user code
     5. Outputs result as JSON on stdout
     """
-    # Serialize context as JSON for safe injection
+    # Pass context via a temp file to avoid apostrophe escaping issues
     context_json = json.dumps(context or {})
 
     # Build the restricted import hook
@@ -211,6 +211,14 @@ def _create_sandbox_script(code: str, context: dict[str, Any] | None = None) -> 
 import sys
 import json
 import importlib
+import os
+
+# ─── Step 0: Load context from temp file ──────────────────────────────────────
+_context_file = os.environ.get("_SANDBOX_CONTEXT_FILE", "")
+context = {{}}
+if _context_file and os.path.exists(_context_file):
+    with open(_context_file) as _f:
+        context = json.load(_f)
 
 # ─── Step 1: Set resource limits (CPU time, memory) ───────────────────────────
 try:
@@ -257,7 +265,6 @@ _safe_builtins = {{
 }}
 
 # ─── Step 4: Execute user code ────────────────────────────────────────────────
-context = json.loads('{context_json}')
 exec_context = {{"__builtins__": _safe_builtins}}
 exec_context.update(context)
 
@@ -329,6 +336,11 @@ async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> 
             with open(script_path, "w") as f:
                 f.write(sandbox_script)
 
+            # Write context to a temp file (avoids apostrophe escaping issues)
+            context_file = os.path.join(tmpdir, "context.json")
+            with open(context_file, "w") as f:
+                f.write(json.dumps(context or {}))
+
             # Execute in isolated subprocess
             # -u: unbuffered output
             # -S: don't add user site directory
@@ -347,6 +359,7 @@ async def execute_analysis(code: str, context: dict[str, Any] | None = None) -> 
                     "HOME": tmpdir,
                     "TMPDIR": tmpdir,
                     "PYTHONDONTWRITEBYTECODE": "1",
+                    "_SANDBOX_CONTEXT_FILE": context_file,
                 },
             )
 
