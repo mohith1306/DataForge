@@ -1,12 +1,13 @@
 """Database adapters for the health monitor.
 
 Provides a unified interface for querying pipeline health data
-from different database backends (ClickHouse, PostgreSQL).
+from different database backends (ClickHouse, PostgreSQL, custom).
 
 Users can plug in their own database by:
 1. Setting MONITOR_DB_TYPE in .env (clickhouse | postgres | custom)
 2. Setting MONITOR_DB_URL to their connection string
-3. Optionally providing custom SQL queries via MONITOR_QUERIES_JSON
+3. Running POST /api/database/setup with their table/column names
+   (generates dataforge.schema.json with the correct SQL)
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 import httpx
+
+from apps.api.app.services.schema_mapping import load_schema
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,7 @@ class ClickHouseAdapter(MonitorDBAdapter):
     def __init__(self, base_url: str, database: str):
         self.base_url = base_url
         self.database = database
+        self._schema = load_schema()
 
     async def _query(self, sql: str) -> list[dict]:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -66,31 +70,42 @@ class ClickHouseAdapter(MonitorDBAdapter):
             return [json.loads(line) for line in text.split("\n") if line.strip()]
 
     async def check_pipeline_failures(self, lookback_seconds: int = 60) -> list[dict]:
+        s = self._schema
+        pt = s["pipeline_table"]
+        pc = s["pipeline_columns"]
+        failed = s["status_values"]["failed"]
         sql = (
-            f"SELECT pipeline_id, pipeline_name, status, started_at, error_message "
-            f"FROM {self.database}.pipeline_events "
-            f"WHERE status = 'FAILED' "
-            f"AND started_at >= now() - INTERVAL {lookback_seconds} SECOND "
-            f"ORDER BY started_at DESC LIMIT 20"
+            f"SELECT {pc['pipeline_id']}, {pc['pipeline_name']}, {pc['status']}, "
+            f"{pc['started_at']}, {pc.get('error_message', 'error_message')} "
+            f"FROM {self.database}.{pt} "
+            f"WHERE {pc['status']} = '{failed}' "
+            f"AND {pc['started_at']} >= now() - INTERVAL {lookback_seconds} SECOND "
+            f"ORDER BY {pc['started_at']} DESC LIMIT 20"
         )
         return await self._query(sql)
 
     async def check_pipeline_freshness(self, stale_minutes: int = 60) -> list[dict]:
+        s = self._schema
+        pt = s["pipeline_table"]
+        pc = s["pipeline_columns"]
         sql = (
-            f"SELECT pipeline_id, pipeline_name, max(started_at) as last_run "
-            f"FROM {self.database}.pipeline_events "
-            f"GROUP BY pipeline_id, pipeline_name "
+            f"SELECT {pc['pipeline_id']}, {pc['pipeline_name']}, max({pc['started_at']}) as last_run "
+            f"FROM {self.database}.{pt} "
+            f"GROUP BY {pc['pipeline_id']}, {pc['pipeline_name']} "
             f"HAVING last_run < now() - INTERVAL {stale_minutes} MINUTE "
             f"ORDER BY last_run ASC"
         )
         return await self._query(sql)
 
     async def check_data_quality(self) -> list[dict]:
+        s = self._schema
+        qt = s["quality_table"]
+        qc = s["quality_columns"]
         checks = []
         try:
             rows = await self._query(
-                f"SELECT countIf(customer_region IS NULL) as nulls, count() as total "
-                f"FROM {self.database}.customer_orders"
+                f"SELECT countIf({qc['null_check_column']} IS NULL) as nulls, count() as total "
+                f"FROM {self.database}.{qt}"
             )
             if rows:
                 nulls = rows[0].get("nulls", 0)
@@ -98,8 +113,8 @@ class ClickHouseAdapter(MonitorDBAdapter):
                 rate = nulls / total if total > 0 else 0
                 if rate > 0.05:
                     checks.append({
-                        "table": "customer_orders",
-                        "column": "customer_region",
+                        "table": qt,
+                        "column": qc["null_check_column"],
                         "null_rate": round(rate, 4),
                         "threshold": 0.05,
                     })
@@ -117,6 +132,7 @@ class PostgresAdapter(MonitorDBAdapter):
         self.dsn = dsn
         self.schema = schema
         self._pool = None
+        self._schema_config = load_schema()
 
     async def _get_pool(self):
         if self._pool is None:
@@ -131,33 +147,43 @@ class PostgresAdapter(MonitorDBAdapter):
             return [dict(r) for r in rows]
 
     async def check_pipeline_failures(self, lookback_seconds: int = 60) -> list[dict]:
+        s = self._schema_config
+        pt = s["pipeline_table"]
+        pc = s["pipeline_columns"]
+        failed = s["status_values"]["failed"]
         sql = f"""
-            SELECT pipeline_id, pipeline_name, status, started_at, error_message
-            FROM {self.schema}.pipeline_events
-            WHERE status = 'FAILED'
-            AND started_at >= now() - interval '{lookback_seconds} seconds'
-            ORDER BY started_at DESC LIMIT 20
+            SELECT {pc['pipeline_id']}, {pc['pipeline_name']}, {pc['status']}, {pc['started_at']}, {pc.get('error_message','error_message')}
+            FROM {self.schema}.{pt}
+            WHERE {pc['status']} = '{failed}'
+            AND {pc['started_at']} >= now() - interval '{lookback_seconds} seconds'
+            ORDER BY {pc['started_at']} DESC LIMIT 20
         """
         return await self._query(sql)
 
     async def check_pipeline_freshness(self, stale_minutes: int = 60) -> list[dict]:
+        s = self._schema_config
+        pt = s["pipeline_table"]
+        pc = s["pipeline_columns"]
         sql = f"""
-            SELECT pipeline_id, pipeline_name, max(started_at) as last_run
-            FROM {self.schema}.pipeline_events
-            GROUP BY pipeline_id, pipeline_name
-            HAVING max(started_at) < now() - interval '{stale_minutes} minutes'
+            SELECT {pc['pipeline_id']}, {pc['pipeline_name']}, max({pc['started_at']}) as last_run
+            FROM {self.schema}.{pt}
+            GROUP BY {pc['pipeline_id']}, {pc['pipeline_name']}
+            HAVING max({pc['started_at']}) < now() - interval '{stale_minutes} minutes'
             ORDER BY last_run ASC
         """
         return await self._query(sql)
 
     async def check_data_quality(self) -> list[dict]:
+        s = self._schema_config
+        qt = s["quality_table"]
+        qc = s["quality_columns"]
         checks = []
         try:
             rows = await self._query(f"""
                 SELECT
-                    count(*) FILTER (WHERE customer_region IS NULL) as nulls,
+                    count(*) FILTER (WHERE {qc['null_check_column']} IS NULL) as nulls,
                     count(*) as total
-                FROM {self.schema}.customer_orders
+                FROM {self.schema}.{qt}
             """)
             if rows:
                 nulls = rows[0].get("nulls", 0)
@@ -165,8 +191,8 @@ class PostgresAdapter(MonitorDBAdapter):
                 rate = nulls / total if total > 0 else 0
                 if rate > 0.05:
                     checks.append({
-                        "table": "customer_orders",
-                        "column": "customer_region",
+                        "table": qt,
+                        "column": qc["null_check_column"],
                         "null_rate": round(rate, 4),
                         "threshold": 0.05,
                     })
