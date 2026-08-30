@@ -5,11 +5,15 @@ Provides:
 - Session management for incidents
 - Event streaming to SSE
 - Approval handling
+
+TrueForge is the actual agent runtime. The agent uses MCP tools
+to investigate incidents — we do NOT pre-fetch data.
 """
 
 import asyncio
 import json
 import logging
+import os
 
 from trueforge.agents import get_investigator_spec
 from trueforge.client import TrueForgeClient, TrueForgeError
@@ -71,78 +75,6 @@ class TrueForgeRuntime:
             logger.error(f"Failed to create agent: {e}")
             raise
 
-    async def _prefetch_data(self, description: str) -> str:
-        """Pre-fetch pipeline data from the configured database for the investigation.
-
-        Uses the same adapter as the monitor, so it works with ClickHouse,
-        PostgreSQL, or custom backends.
-        """
-        from apps.api.app.services.db_adapter import create_monitor_adapter
-
-        adapter = create_monitor_adapter()
-        sections = []
-
-        # 1. Pipeline status (recent failures)
-        try:
-            failures = await adapter.check_pipeline_failures(lookback_seconds=3600)
-            sections.append("### Pipeline Status (recent runs)")
-            if failures:
-                for r in failures:
-                    sections.append(
-                        f"- {r.get('pipeline_name','?')} ({r.get('pipeline_id','?')}): "
-                        f"{r.get('status','?')} | started: {r.get('started_at','?')} | "
-                        f"error: {str(r.get('error_message',''))[:200]}"
-                    )
-            else:
-                sections.append("- No recent failures found")
-        except Exception as e:
-            sections.append(f"### Pipeline Status\nError fetching: {e}")
-
-        # 2. Pipeline freshness
-        try:
-            stale = await adapter.check_pipeline_freshness(stale_minutes=120)
-            sections.append("\n### Data Freshness (stale pipelines)")
-            if stale:
-                for r in stale:
-                    sections.append(
-                        f"- {r.get('pipeline_name','?')} ({r.get('pipeline_id','?')}): "
-                        f"last run: {r.get('last_run','?')}"
-                    )
-            else:
-                sections.append("- No stale pipelines")
-        except Exception as e:
-            sections.append(f"\n### Data Freshness\nError fetching: {e}")
-
-        # 3. Data quality checks
-        try:
-            dq = await adapter.check_data_quality()
-            if dq:
-                sections.append("\n### Failed Data Quality Checks")
-                for r in dq:
-                    sections.append(
-                        f"- {r.get('table','?')}.{r.get('column','?')}: "
-                        f"null_rate={r.get('null_rate',0):.1%} (threshold: {r.get('threshold',0):.0%})"
-                    )
-            else:
-                sections.append("\n### Data Quality\nAll checks passing.")
-        except Exception as e:
-            sections.append(f"\n### Data Quality\nError fetching: {e}")
-
-        # 4. Recent commits
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["git", "log", "--oneline", "-5", "--format=%h %s (%ai)"],
-                capture_output=True, text=True, timeout=5,
-                cwd=os.getenv("GITHUB_REPO_PATH", "."),
-            )
-            commits = result.stdout.strip()
-            sections.append(f"\n### Recent Git Commits\n{commits}" if commits else "\n### Recent Git Commits\nNo commits found.")
-        except Exception as e:
-            sections.append(f"\n### Recent Git Commits\nError: {e}")
-
-        return "\n".join(sections)
-
     async def start_investigation(
         self,
         incident_id: str,
@@ -151,29 +83,21 @@ class TrueForgeRuntime:
     ) -> dict:
         """Start a TrueForge investigation session for an incident.
 
-        Pre-fetches data from ClickHouse so the LLM just needs to analyze,
-        not call tools (avoids Gemini tool-calling loop issues).
+        The agent uses MCP tools to investigate — we provide the incident
+        context and let TrueForge orchestrate the tool calls.
         """
         await self.ensure_agent()
 
-        # Pre-fetch data from ClickHouse
-        prefetched = await self._prefetch_data(description)
-
         message = (
-            f"## Data Quality Incident\n\n"
+            f"## Data Quality Incident Detected\n\n"
             f"Incident ID: {incident_id}\n"
             f"Type: {incident_type}\n"
             f"Description: {description}\n\n"
-            f"## Pre-fetched Data\n\n"
-            f"{prefetched}\n\n"
-            f"## Task\n\n"
-            f"Analyze the above data and write your investigation report.\n"
-            f"Do NOT call any tools — all data is provided above.\n\n"
-            f"## Response Format\n\n"
-            f"ROOT CAUSE: [describe the root cause]\n"
-            f"CONFIDENCE: [high/medium/low]\n"
-            f"EVIDENCE: [list the evidence]\n"
-            f"REMEDIATION PLAN: [describe how to fix]"
+            f"## Your Task\n\n"
+            f"Investigate this incident using the available MCP tools.\n"
+            f"Follow the investigation protocol in your instructions.\n"
+            f"Gather evidence from pipeline status, logs, database, and git history.\n"
+            f"Then provide your root cause analysis and remediation plan."
         )
 
         try:

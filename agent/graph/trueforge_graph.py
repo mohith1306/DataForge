@@ -178,8 +178,9 @@ async def trueforge_approval(state: dict) -> dict:
     actions = plan.get("actions", [])
 
     # Check if approval is required
-    from agent.tools.risk import requires_approval
-    if not requires_approval(actions):
+    from agent.tools.risk import classify_remediation_risk, APPROVAL_REQUIRED_LEVELS
+    risk_level = classify_remediation_risk(actions)
+    if risk_level not in APPROVAL_REQUIRED_LEVELS:
         return {
             "approval_status": "auto_approved",
             "approval_note": "Low-risk actions auto-approved",
