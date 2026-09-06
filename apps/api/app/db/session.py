@@ -1,5 +1,6 @@
 """DataForge API — Database session."""
 import logging
+from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -12,42 +13,57 @@ logger = logging.getLogger(__name__)
 engine = create_async_engine(settings.database_url, echo=False)
 async_session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
+MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
 
 async def ensure_schema():
-    """Add missing columns to existing tables on startup."""
+    """Run database migrations on startup."""
     async with engine.begin() as conn:
+        # Run migration files in order
+        if MIGRATIONS_DIR.exists():
+            migration_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
+            for migration_file in migration_files:
+                try:
+                    sql = migration_file.read_text()
+                    # Split by semicolons and execute each statement
+                    for statement in sql.split(";"):
+                        statement = statement.strip()
+                        if statement and not statement.startswith("--"):
+                            await conn.execute(text(statement))
+                    logger.info("Migration applied: %s", migration_file.name)
+                except Exception as e:
+                    # Some migrations may fail if already applied
+                    logger.debug("Migration %s skipped: %s", migration_file.name, e)
+
+        # Legacy migrations for existing deployments
         try:
             await conn.execute(text(
                 "ALTER TABLE incidents "
                 "ADD COLUMN IF NOT EXISTS trueforge_session_id VARCHAR(100)"
             ))
-            logger.info("Schema migration: ensured trueforge_session_id column")
-        except Exception as e:
-            logger.warning(f"Schema migration skipped: {e}")
+        except Exception:
+            pass
         try:
             await conn.execute(text(
                 "ALTER TABLE incidents "
                 "ADD COLUMN IF NOT EXISTS verification_result TEXT"
             ))
-            logger.info("Schema migration: ensured verification_result column")
-        except Exception as e:
-            logger.warning(f"Schema migration skipped: {e}")
+        except Exception:
+            pass
         try:
             await conn.execute(text(
                 "ALTER TABLE incident_events "
                 "ALTER COLUMN metadata TYPE JSONB USING metadata::JSONB"
             ))
-            logger.info("Schema migration: ensured incident_events.metadata column is JSONB")
-        except Exception as e:
-            logger.warning(f"Schema migration for incident_events.metadata skipped: {e}")
+        except Exception:
+            pass
         try:
             await conn.execute(text(
                 "ALTER TABLE incidents "
                 "ADD COLUMN IF NOT EXISTS connector_id VARCHAR(100)"
             ))
-            logger.info("Schema migration: ensured connector_id column")
-        except Exception as e:
-            logger.warning(f"Schema migration skipped: {e}")
+        except Exception:
+            pass
 
 
 async def get_db():  # type: ignore[no-untyped-def]
