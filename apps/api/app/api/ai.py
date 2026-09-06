@@ -85,9 +85,13 @@ async def create_policy(
 async def update_policy(
     policy_id: str,
     policy_data: PolicyUpdate,
-    user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(require_write),
 ) -> Dict[str, Any]:
     """Update an existing policy."""
+    # Bug #11 fix: Only admin can update policies
+    if not user.has_scope("admin"):
+        raise HTTPException(status_code=403, detail="Admin scope required for policy mutations")
+    
     policy = _policy_engine.get_policy(policy_id)
     if not policy:
         raise HTTPException(status_code=404, detail="Policy not found")
@@ -109,9 +113,13 @@ async def update_policy(
 @router.delete("/policies/{policy_id}")
 async def delete_policy(
     policy_id: str,
-    user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(require_write),
 ) -> Dict[str, Any]:
     """Delete a policy."""
+    # Bug #11 fix: Only admin can delete policies
+    if not user.has_scope("admin"):
+        raise HTTPException(status_code=403, detail="Admin scope required for policy mutations")
+    
     success = _policy_engine.remove_policy(policy_id)
     if not success:
         raise HTTPException(status_code=404, detail="Policy not found")
