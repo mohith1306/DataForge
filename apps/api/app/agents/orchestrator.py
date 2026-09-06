@@ -75,6 +75,8 @@ class AgentOrchestrator:
         workflow_type: WorkflowType,
         incident_data: Dict[str, Any],
         context: Optional[Dict[str, Any]] = None,
+        owner_id: Optional[str] = None,
+        org_id: Optional[str] = None,
     ) -> str:
         """Create a new investigation workflow."""
         workflow_id = str(uuid4())
@@ -91,6 +93,8 @@ class AgentOrchestrator:
             "steps": steps,
             "current_step": 0,
             "results": {},
+            "owner_id": owner_id,
+            "org_id": org_id,
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
         }
@@ -222,6 +226,34 @@ class AgentOrchestrator:
             "status": workflow["status"],
             "results": workflow["results"],
         }
+
+    def validate_workflow_access(
+        self,
+        workflow_id: str,
+        user_id: Optional[str] = None,
+        org_id: Optional[str] = None,
+    ) -> bool:
+        """Validate that a user/org has access to a workflow.
+        
+        Bug #12 fix: Workflows are scoped to their creator's org.
+        """
+        workflow = self.workflows.get(workflow_id)
+        if not workflow:
+            return False
+        
+        # If no owner/org, allow access (backwards compatibility)
+        if not workflow.get("owner_id") and not workflow.get("org_id"):
+            return True
+        
+        # Check org_id match
+        if org_id and workflow.get("org_id") == org_id:
+            return True
+        
+        # Check owner_id match
+        if user_id and workflow.get("owner_id") == user_id:
+            return True
+        
+        return False
 
     def cancel_workflow(self, workflow_id: str) -> bool:
         """Cancel a running workflow."""

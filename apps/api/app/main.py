@@ -1,7 +1,7 @@
 """DataForge API — Main application."""
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.app.api.auth import router as auth_router
@@ -15,6 +15,7 @@ from apps.api.app.api.incidents import router as incidents_router
 from apps.api.app.api.monitor import router as monitor_router
 from apps.api.app.api.reliability_graph import router as graph_router
 from apps.api.app.api.stream import router as stream_router
+from apps.api.app.core.auth import get_current_user
 from apps.api.app.core.config import settings
 from apps.api.app.core.logging import setup_logging
 from apps.api.app.core.multi_tenancy import TenantMiddleware
@@ -83,7 +84,8 @@ app.include_router(stream_router, prefix="/api")
 app.include_router(chaos_router, prefix="/api")
 app.include_router(monitor_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
-app.include_router(connectors_router, prefix="/api")
+# Bug #18 fix: Add auth dependency to connectors router
+app.include_router(connectors_router, prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 @app.get("/")

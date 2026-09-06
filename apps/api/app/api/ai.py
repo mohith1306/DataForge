@@ -5,14 +5,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..core.auth import get_current_user, UserContext
+from ..core.auth import get_current_user, UserContext, require_write
 from ..core.policy_engine import Policy, PolicyEngine, PolicyType
 from ..core.risk_classifier import EnhancedRiskClassifier
 from ..agents.orchestrator import AgentOrchestrator, WorkflowType
 
-router = APIRouter(prefix="/api/ai", tags=["ai"])
+router = APIRouter(prefix="/ai", tags=["ai"])
 
-# Singleton instances
+# Singleton instances - Bug #11 fix: Policies are platform-global, mutations require admin
 _policy_engine = PolicyEngine()
 _risk_classifier = EnhancedRiskClassifier(_policy_engine)
 _agent_orchestrator = AgentOrchestrator()
@@ -45,7 +45,7 @@ class WorkflowCreate(BaseModel):
     context: Dict[str, Any] = {}
 
 
-# Policy endpoints
+# Policy endpoints - Bug #11 fix: Require admin for mutations
 @router.get("/policies")
 async def list_policies(
     policy_type: Optional[str] = None,
@@ -63,9 +63,13 @@ async def list_policies(
 @router.post("/policies")
 async def create_policy(
     policy_data: PolicyCreate,
-    user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(require_write),
 ) -> Dict[str, Any]:
     """Create a new policy."""
+    # Bug #11 fix: Only admin can create policies
+    if not user.has_scope("admin"):
+        raise HTTPException(status_code=403, detail="Admin scope required for policy mutations")
+    
     policy = Policy(
         name=policy_data.name,
         policy_type=PolicyType(policy_data.policy_type),
@@ -207,7 +211,7 @@ async def get_agent_info(
     }
 
 
-# Workflow endpoints
+# Workflow endpoints - Bug #12 fix: Add ownership validation
 @router.post("/workflows")
 async def create_workflow(
     workflow_data: WorkflowCreate,
@@ -223,6 +227,8 @@ async def create_workflow(
         workflow_type=workflow_type,
         incident_data=workflow_data.incident_data,
         context=workflow_data.context,
+        owner_id=str(user.user_id),
+        org_id=str(user.org_id) if user.org_id else None,
     )
     
     return {
@@ -237,9 +243,18 @@ async def execute_workflow(
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Execute a workflow."""
+    # Bug #12 fix: Validate workflow access
+    if not _agent_orchestrator.validate_workflow_access(
+        workflow_id,
+        user_id=str(user.user_id),
+        org_id=str(user.org_id) if user.org_id else None,
+    ):
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
     result = await _agent_orchestrator.execute_workflow(workflow_id)
     
-    if "error" in result and result.get("status") == "failed":
+    # Bug #17 fix: Return proper error status
+    if "error" in result and not result.get("results"):
         raise HTTPException(status_code=500, detail=result["error"])
     
     return result
@@ -251,6 +266,14 @@ async def get_workflow_status(
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Get workflow status."""
+    # Bug #12 fix: Validate workflow access
+    if not _agent_orchestrator.validate_workflow_access(
+        workflow_id,
+        user_id=str(user.user_id),
+        org_id=str(user.org_id) if user.org_id else None,
+    ):
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
     status = _agent_orchestrator.get_workflow_status(workflow_id)
     if not status:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -263,6 +286,14 @@ async def get_workflow_results(
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Get workflow results."""
+    # Bug #12 fix: Validate workflow access
+    if not _agent_orchestrator.validate_workflow_access(
+        workflow_id,
+        user_id=str(user.user_id),
+        org_id=str(user.org_id) if user.org_id else None,
+    ):
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
     results = _agent_orchestrator.get_workflow_results(workflow_id)
     if not results:
         raise HTTPException(status_code=404, detail="Workflow not found")

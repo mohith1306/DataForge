@@ -76,11 +76,12 @@ async def create_incident(
 @router.get("/stats")
 async def get_stats(
     db: AsyncSession = Depends(get_db),
-    user: Optional[UserContext] = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
-    query = select(Incident)
-    if user and user.org_id:
-        query = query.where(Incident.org_id == user.org_id)
+    if not user.org_id:
+        return {"total": 0, "open": 0, "resolved": 0, "critical": 0}
+    
+    query = select(Incident).where(Incident.org_id == user.org_id)
     result = await db.execute(query)
     all_incidents = list(result.scalars().all())
     return {
@@ -100,13 +101,13 @@ async def list_incidents(
     connector_id: str | None = None,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
-    user: Optional[UserContext] = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> list[Incident]:
+    if not user.org_id:
+        return []
+    
     query = select(Incident).order_by(Incident.created_at.desc()).limit(limit)
-
-    # Filter by org_id if user is authenticated
-    if user and user.org_id:
-        query = query.where(Incident.org_id == user.org_id)
+    query = query.where(Incident.org_id == user.org_id)
 
     if status:
         query = query.where(Incident.status == status)
@@ -121,10 +122,18 @@ async def list_incidents(
 
 @router.get("/{incident_id}", response_model=IncidentResponse)
 async def get_incident(
-    incident_id: str, db: AsyncSession = Depends(get_db)
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> Incident:
+    if not user.org_id:
+        raise HTTPException(status_code=403, detail="Organization membership required")
+    
     result = await db.execute(
-        select(Incident).where(Incident.id == incident_id)
+        select(Incident).where(
+            Incident.id == incident_id,
+            Incident.org_id == user.org_id,
+        )
     )
     incident = result.scalar_one_or_none()
     if not incident:
@@ -134,11 +143,19 @@ async def get_incident(
 
 @router.post("/{incident_id}/start")
 async def start_investigation(
-    incident_id: str, db: AsyncSession = Depends(get_db)
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Start a TrueForge investigation session for an incident."""
+    if not user.org_id:
+        raise HTTPException(status_code=403, detail="Organization membership required")
+    
     result = await db.execute(
-        select(Incident).where(Incident.id == incident_id)
+        select(Incident).where(
+            Incident.id == incident_id,
+            Incident.org_id == user.org_id,
+        )
     )
     incident = result.scalar_one_or_none()
     if not incident:
@@ -936,13 +953,20 @@ async def handle_approval(
     incident_id: str,
     payload: ApprovalRequest,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Approve or reject a remediation plan.
 
     Bug 8 fix: Schedule remediation task on approval.
     """
+    if not user.org_id:
+        raise HTTPException(status_code=403, detail="Organization membership required")
+    
     result = await db.execute(
-        select(Incident).where(Incident.id == incident_id)
+        select(Incident).where(
+            Incident.id == incident_id,
+            Incident.org_id == user.org_id,
+        )
     )
     incident = result.scalar_one_or_none()
     if not incident:

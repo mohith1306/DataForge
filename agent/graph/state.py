@@ -19,6 +19,7 @@ class IncidentState(TypedDict):
     risk_level: str
     approval_required: bool
     approval_status: str
+    approval_reason: str
     execution_result: dict[str, Any]
     verification_result: dict[str, Any]
     incident_type: str

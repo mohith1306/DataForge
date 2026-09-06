@@ -95,6 +95,8 @@ ALTER TABLE incidents ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projec
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS reliability_graph_snapshot JSONB;
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS failure_dna VARCHAR(500);
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS business_impact_score FLOAT;
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS approval_reason TEXT;
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS verification_result TEXT;
 
 CREATE INDEX idx_incidents_org ON incidents(org_id);
 CREATE INDEX idx_incidents_project ON incidents(project_id);

@@ -27,9 +27,16 @@ async def ensure_schema():
                     sql = migration_file.read_text()
                     # Split by semicolons and execute each statement
                     for statement in sql.split(";"):
-                        statement = statement.strip()
-                        if statement and not statement.startswith("--"):
-                            await conn.execute(text(statement))
+                        # Strip comment-only lines before checking
+                        lines = statement.strip().split("\n")
+                        non_comment_lines = [
+                            line for line in lines
+                            if not line.strip().startswith("--")
+                        ]
+                        cleaned = "\n".join(non_comment_lines).strip()
+                        
+                        if cleaned:
+                            await conn.execute(text(cleaned))
                     logger.info("Migration applied: %s", migration_file.name)
                 except Exception as e:
                     # Some migrations may fail if already applied

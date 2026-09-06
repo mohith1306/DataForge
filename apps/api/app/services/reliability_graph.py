@@ -204,8 +204,16 @@ class ReliabilityGraphService:
         edge_type: str | None = None,
         direction: str = "both",
     ) -> list[ReliabilityEdge]:
-        """Get edges, optionally filtered by node, type, and direction."""
-        query = select(ReliabilityEdge)
+        """Get edges, optionally filtered by node, type, and direction.
+        
+        Bug #3 fix: Filter edges by org_id through source node.
+        """
+        # Join through source node to filter by org_id
+        query = (
+            select(ReliabilityEdge)
+            .join(ReliabilityNode, ReliabilityEdge.source_id == ReliabilityNode.id)
+            .where(ReliabilityNode.org_id == self.org_id)
+        )
 
         if node_id:
             if direction == "outgoing":
@@ -229,23 +237,32 @@ class ReliabilityGraphService:
     async def get_edge(
         self, source_id: UUID, target_id: UUID, edge_type: str
     ) -> ReliabilityEdge | None:
-        """Get a specific edge."""
+        """Get a specific edge with tenant validation."""
         result = await self.db.execute(
             select(ReliabilityEdge)
+            .join(ReliabilityNode, ReliabilityEdge.source_id == ReliabilityNode.id)
             .where(
                 and_(
                     ReliabilityEdge.source_id == source_id,
                     ReliabilityEdge.target_id == target_id,
                     ReliabilityEdge.edge_type == edge_type,
+                    ReliabilityNode.org_id == self.org_id,
                 )
             )
         )
         return result.scalar_one_or_none()
 
     async def delete_edge(self, edge_id: UUID) -> bool:
-        """Delete an edge."""
+        """Delete an edge with tenant validation."""
         result = await self.db.execute(
-            select(ReliabilityEdge).where(ReliabilityEdge.id == edge_id)
+            select(ReliabilityEdge)
+            .join(ReliabilityNode, ReliabilityEdge.source_id == ReliabilityNode.id)
+            .where(
+                and_(
+                    ReliabilityEdge.id == edge_id,
+                    ReliabilityNode.org_id == self.org_id,
+                )
+            )
         )
         edge = result.scalar_one_or_none()
         if not edge:
@@ -504,6 +521,7 @@ class ReliabilityGraphService:
 
         if not affected_node_ids:
             return {
+                "impact_score": 0.0,
                 "impact_level": "unknown",
                 "affected_business_processes": [],
                 "recommended_actions": [],

@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.app.core.auth import UserContext, get_current_user
+from apps.api.app.core.auth import UserContext, get_current_user, require_write
 from apps.api.app.db.session import get_db
 from apps.api.app.schemas.reliability_graph import (
     BlastRadius,
@@ -42,6 +42,7 @@ async def get_graph_service(
 async def create_node(
     payload: NodeCreate,
     graph: ReliabilityGraphService = Depends(get_graph_service),
+    user: UserContext = Depends(require_write),
 ) -> NodeResponse:
     """Add a node to the reliability graph."""
     node = await graph.add_node(
@@ -90,6 +91,7 @@ async def update_node(
     node_id: UUID,
     payload: NodeUpdate,
     graph: ReliabilityGraphService = Depends(get_graph_service),
+    user: UserContext = Depends(require_write),
 ) -> NodeResponse:
     """Update a node."""
     node = await graph.update_node(
@@ -110,6 +112,7 @@ async def update_node(
 async def delete_node(
     node_id: UUID,
     graph: ReliabilityGraphService = Depends(get_graph_service),
+    user: UserContext = Depends(require_write),
 ) -> dict:
     """Delete a node and all its edges."""
     success = await graph.delete_node(node_id)
@@ -125,6 +128,7 @@ async def delete_node(
 async def create_edge(
     payload: EdgeCreate,
     graph: ReliabilityGraphService = Depends(get_graph_service),
+    user: UserContext = Depends(require_write),
 ) -> EdgeResponse:
     """Add an edge between two nodes."""
     try:
@@ -158,6 +162,7 @@ async def list_edges(
 async def delete_edge(
     edge_id: UUID,
     graph: ReliabilityGraphService = Depends(get_graph_service),
+    user: UserContext = Depends(require_write),
 ) -> dict:
     """Delete an edge."""
     success = await graph.delete_edge(edge_id)

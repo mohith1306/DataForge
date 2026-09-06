@@ -42,7 +42,7 @@ class NodeResponse(BaseModel):
     node_type: str
     name: str
     external_id: Optional[str]
-    metadata: dict
+    metadata: dict = Field(validation_alias="extra_data")
     owner_id: Optional[uuid.UUID]
     business_criticality: str
     reliability_score: float
@@ -69,7 +69,7 @@ class EdgeResponse(BaseModel):
     source_id: uuid.UUID
     target_id: uuid.UUID
     edge_type: str
-    metadata: dict
+    metadata: dict = Field(validation_alias="extra_data")
     created_at: datetime
 
     model_config = {"from_attributes": True}

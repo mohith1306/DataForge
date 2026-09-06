@@ -11,7 +11,8 @@ export function AuthProvider({ children }) {
 
   const fetchUser = useCallback(async (key) => {
     try {
-      const response = await fetch('/api/auth/me', {
+      const API_BASE = import.meta.env.VITE_API_URL || '';
+      const response = await fetch(`${API_BASE}/api/auth/me`, {
         headers: { 'X-API-Key': key },
       });
       if (response.ok) {

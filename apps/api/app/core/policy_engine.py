@@ -210,9 +210,27 @@ class PolicyEngine:
         return AutonomyLevel.MANUAL_APPROVAL_REQUIRED
 
     def requires_approval(self, action: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> bool:
-        """Determine if an action requires approval."""
-        risk_level = self.evaluate_risk(action)
+        """Determine if an action requires approval.
         
+        Bug #13 fix: Evaluate conditions from context before risk-level defaults.
+        """
+        risk_level = self.evaluate_risk(action)
+        context = context or {}
+        
+        # First, evaluate any condition-based rules
+        for policy in self.policies.values():
+            if (
+                policy.policy_type == PolicyType.APPROVAL_REQUIRED
+                and policy.enabled
+            ):
+                for rule in policy.rules:
+                    condition = rule.get("condition")
+                    if condition:
+                        # Evaluate condition against context
+                        if self._evaluate_condition(condition, context):
+                            return rule.get("requires_approval", False)
+        
+        # Then, apply risk-level rules
         for policy in self.policies.values():
             if (
                 policy.policy_type == PolicyType.APPROVAL_REQUIRED
@@ -224,6 +242,30 @@ class PolicyEngine:
         
         # Default: require approval for high and critical
         return risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+
+    def _evaluate_condition(self, condition: str, context: Dict[str, Any]) -> bool:
+        """Evaluate a condition string against context.
+        
+        Bug #13 fix: Simple condition evaluation for time_window and other context values.
+        """
+        # Parse simple conditions like "time_window == 'off_hours'"
+        if "==" in condition:
+            parts = condition.split("==")
+            if len(parts) == 2:
+                key = parts[0].strip()
+                value = parts[1].strip().strip("'\"")
+                return context.get(key) == value
+        
+        # Parse "in" conditions like "action_type in ['scale', 'restart']"
+        if " in " in condition:
+            parts = condition.split(" in ")
+            if len(parts) == 2:
+                key = parts[0].strip()
+                values_str = parts[1].strip().strip("[]")
+                values = [v.strip().strip("'\"") for v in values_str.split(",")]
+                return context.get(key) in values
+        
+        return False
 
     def get_action_constraints(self, action_type: str) -> List[str]:
         """Get constraints for a specific action type."""

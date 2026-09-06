@@ -72,13 +72,42 @@ class ExecutionFabric:
             "capabilities": executor.get_capabilities() if is_valid else [],
         }
 
+    # Bug #14 fix: Map action types to executor types
+    ACTION_TO_EXECUTOR = {
+        "rerun_pipeline": "dbt",
+        "run_model": "dbt",
+        "test_model": "dbt",
+        "scale": "kubernetes",
+        "restart": "kubernetes",
+        "rollout": "kubernetes",
+        "deploy": "kubernetes",
+        "create_issue": "github",
+        "create_pr": "github",
+        "merge_pr": "github",
+        "database": "sql",
+        "query": "sql",
+        "execute_sql": "sql",
+        "dag_run": "airflow",
+        "trigger_dag": "airflow",
+        "cloud_api": "cloud_api",
+        "aws": "cloud_api",
+        "gcp": "cloud_api",
+        "azure": "cloud_api",
+    }
+
     async def execute(
         self,
         action: Dict[str, Any],
         context: Optional[Dict[str, Any]] = None,
     ) -> ExecutionResult:
         """Execute an action using the appropriate executor."""
-        executor_type = action.get("action_type", action.get("executor_type", ""))
+        # Bug #14 fix: Map action_type to executor_type
+        action_type = action.get("action_type", "")
+        executor_type = action.get("executor_type", "")
+        
+        if not executor_type:
+            executor_type = self.ACTION_TO_EXECUTOR.get(action_type, action_type)
+        
         executor = self.executors.get(executor_type)
         
         if not executor:
