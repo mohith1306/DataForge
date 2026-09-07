@@ -21,6 +21,7 @@ from apps.api.app.core.auth import get_current_user
 from apps.api.app.core.config import settings
 from apps.api.app.core.logging import setup_logging
 from apps.api.app.core.multi_tenancy import TenantMiddleware
+from apps.api.app.gateway.middleware import GatewayMiddleware
 
 
 @asynccontextmanager
@@ -58,13 +59,14 @@ app = FastAPI(
 
 # Middleware
 app.add_middleware(TenantMiddleware)
+app.add_middleware(GatewayMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-API-Key"],
+    expose_headers=["X-API-Key", "X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
 )
 
 # Core routers (no auth required)
