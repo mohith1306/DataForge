@@ -114,6 +114,15 @@ async def require_write(
     return user
 
 
+async def require_read(
+    user: UserContext = Depends(get_current_user),
+) -> UserContext:
+    """Require read scope."""
+    if not user.has_scope("read"):
+        raise HTTPException(status_code=403, detail="Read access required")
+    return user
+
+
 async def require_admin(
     user: UserContext = Depends(get_current_user),
 ) -> UserContext:

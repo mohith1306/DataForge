@@ -22,7 +22,7 @@ class AddConnectorRequest(BaseModel):
     database: str = Field(..., min_length=1)
     username: str = ""
     password: str = ""
-    schema: str = "public"
+    db_schema: str = Field(default="public", alias="schema")
     extra: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
     poll_interval: int = Field(default=30, ge=5, le=3600)
@@ -38,13 +38,13 @@ async def list_connectors():
 async def add_connector(req: AddConnectorRequest):
     """Add a new database connector — auto-discovers tables and starts monitoring."""
     # Set schema default based on db type
-    schema = req.schema
+    schema = req.db_schema
     if req.db_type == "clickhouse":
         schema = req.database
     elif req.db_type == "snowflake":
-        schema = req.schema or "PUBLIC"
+        schema = req.db_schema or "PUBLIC"
     elif req.db_type == "databricks":
-        schema = req.schema or "default"
+        schema = req.db_schema or "default"
 
     config = ConnectorConfig(
         id=f"conn_{uuid.uuid4().hex[:12]}",
