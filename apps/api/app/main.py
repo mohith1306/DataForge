@@ -12,6 +12,8 @@ from apps.api.app.api.database import router as database_router
 from apps.api.app.api.events import router as events_router
 from apps.api.app.api.health import router as health_router
 from apps.api.app.api.incidents import router as incidents_router
+from apps.api.app.api.intelligence import router as intelligence_router
+from apps.api.app.api.metadata import router as metadata_router
 from apps.api.app.api.monitor import router as monitor_router
 from apps.api.app.api.reliability_graph import router as graph_router
 from apps.api.app.api.stream import router as stream_router
@@ -86,6 +88,10 @@ app.include_router(monitor_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 # Bug #18 fix: Add auth dependency to connectors router
 app.include_router(connectors_router, prefix="/api", dependencies=[Depends(get_current_user)])
+
+# Phase 4: Metadata and Intelligence routers
+app.include_router(metadata_router, prefix="/api")
+app.include_router(intelligence_router, prefix="/api")
 
 
 @app.get("/")
