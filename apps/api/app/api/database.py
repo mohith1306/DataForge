@@ -23,7 +23,7 @@ class SchemaMappingInput(BaseModel):
 class SetupResponse(BaseModel):
     status: str
     message: str
-    schema_info: dict = Field(alias="schema")
+    schema_info: dict = Field(alias="schema_name")
     create_table_sql: dict[str, str]
     env_vars: dict[str, str]
     test_queries: dict[str, str]

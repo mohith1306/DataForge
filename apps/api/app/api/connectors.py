@@ -22,7 +22,7 @@ class AddConnectorRequest(BaseModel):
     database: str = Field(..., min_length=1)
     username: str = ""
     password: str = ""
-    db_schema: str = Field(default="public", alias="schema")
+    db_schema: str = Field(default="public", alias="schema_name")
     extra: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
     poll_interval: int = Field(default=30, ge=5, le=3600)
