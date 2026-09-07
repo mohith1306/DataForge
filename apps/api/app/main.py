@@ -9,6 +9,8 @@ from apps.api.app.api.database import router as database_router
 from apps.api.app.api.events import router as events_router
 from apps.api.app.api.health import router as health_router
 from apps.api.app.api.incidents import router as incidents_router
+from apps.api.app.api.intelligence import router as intelligence_router
+from apps.api.app.api.metadata import router as metadata_router
 from apps.api.app.api.monitor import router as monitor_router
 from apps.api.app.api.stream import router as stream_router
 from apps.api.app.core.config import settings
@@ -61,6 +63,10 @@ app.include_router(chaos_router, prefix="/api")
 app.include_router(monitor_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
+
+# Phase 4: Metadata and Intelligence routers
+app.include_router(metadata_router, prefix="/api")
+app.include_router(intelligence_router, prefix="/api")
 
 
 @app.get("/")
