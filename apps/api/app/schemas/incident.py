@@ -20,7 +20,12 @@ class IncidentResponse(BaseModel):
     incident_type: str | None
     connector_id: str | None
     trueforge_session_id: str | None
+    approval_reason: str | None
     verification_result: str | None
+    org_id: uuid.UUID | None
+    project_id: uuid.UUID | None
+    failure_dna: str | None
+    business_impact_score: float | None
     created_at: datetime
     resolved_at: datetime | None
 

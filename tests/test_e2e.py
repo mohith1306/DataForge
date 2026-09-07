@@ -19,6 +19,7 @@ def _make_state(**overrides) -> dict:
         "risk_level": "LOW",
         "approval_required": False,
         "approval_status": "",
+        "approval_reason": "",
         "execution_result": {},
         "verification_result": {},
         "incident_type": "stale_data",
@@ -82,10 +83,49 @@ def test_high_risk_requires_approval():
 
 @pytest.mark.asyncio
 async def test_approval_gate_pauses_on_high_risk():
-    state = _make_state(approval_required=True, risk_level="HIGH")
+    state = _make_state(
+        approval_required=True,
+        risk_level="HIGH",
+        remediation_plan={"actions": [{"tool": "rollback_deployment", "description": "Roll back to v1.2"}]},
+    )
     result = await approval_gate(state)
     assert result["status"] == "awaiting_approval"
     assert result["approval_status"] == "pending"
+    assert "approval_reason" in result
+    assert "HIGH" in result["approval_reason"]
+    assert "rollback_deployment" in result["approval_reason"]
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_reason_in_event_metadata():
+    """The approval.required event must carry structured metadata for the frontend."""
+    state = _make_state(
+        approval_required=True,
+        risk_level="HIGH",
+        remediation_plan={"actions": [
+            {"tool": "rollback_deployment", "description": "Roll back to v1.2"},
+            {"tool": "reprocess_partition", "description": "Reprocess affected partitions"},
+        ]},
+    )
+    result = await approval_gate(state)
+    events = result["events"]
+    approval_event = next(e for e in events if e["type"] == "approval.required")
+    meta = approval_event["metadata_"]
+    assert meta["risk_level"] == "HIGH"
+    assert "approval_reason" in meta
+    assert len(meta["actions"]) == 2
+    assert meta["actions"][0]["tool"] == "rollback_deployment"
+    assert meta["actions"][1]["tool"] == "reprocess_partition"
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_auto_approve_has_no_reason():
+    """Auto-approved (low-risk) incidents must not expose an approval_reason."""
+    state = _make_state(approval_required=False, risk_level="LOW")
+    result = await approval_gate(state)
+    assert result["approval_status"] == "auto_approved"
+    # approval_reason is not set for auto-approved cases
+    assert "approval_reason" not in result
 
 
 @pytest.mark.asyncio

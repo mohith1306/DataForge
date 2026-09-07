@@ -34,9 +34,15 @@ async def approval_gate(state: dict) -> dict:
         for a in actions
     )
 
+    approval_reason = (
+        f"Risk level {risk_level} requires human approval. "
+        f"Proposed actions: {', '.join(a.get('tool', 'unknown') for a in actions)}"
+    )
+
     return {
         "status": "awaiting_approval",
         "approval_status": "pending",
+        "approval_reason": approval_reason,
         "events": state.get("events", []) + [
             {
                 "type": "approval.required",
@@ -45,6 +51,14 @@ async def approval_gate(state: dict) -> dict:
                     f"HUMAN APPROVAL REQUIRED (risk: {risk_level})\n"
                     f"Proposed actions:\n{action_descriptions}"
                 ),
+                "metadata_": {
+                    "risk_level": risk_level,
+                    "approval_reason": approval_reason,
+                    "actions": [
+                        {"tool": a.get("tool", "unknown"), "description": a.get("description", "")}
+                        for a in actions
+                    ],
+                },
             }
         ],
     }

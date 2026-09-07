@@ -27,6 +27,7 @@ def _make_state(**overrides) -> IncidentState:
         "risk_level": "",
         "approval_required": False,
         "approval_status": "",
+        "approval_reason": "",
         "execution_result": {},
         "verification_result": {},
         "incident_type": "",

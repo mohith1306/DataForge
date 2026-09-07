@@ -3,12 +3,15 @@
 import asyncio
 import json
 import logging
+from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.app.api.stream import publish_event
+from apps.api.app.core.auth import UserContext, get_current_user
 from apps.api.app.core.config import settings
 from apps.api.app.db.models import Incident, IncidentEvent
 from apps.api.app.db.session import async_session_factory, get_db
@@ -44,13 +47,16 @@ def _incident_to_dict(inc: Incident) -> dict:
         "incident_type": inc.incident_type,
         "connector_id": inc.connector_id,
         "trueforge_session_id": inc.trueforge_session_id,
+        "approval_reason": inc.approval_reason,
         "verification_result": inc.verification_result,
     }
 
 
 @router.post("/", response_model=IncidentResponse, status_code=201)
 async def create_incident(
-    payload: IncidentCreate, db: AsyncSession = Depends(get_db)
+    payload: IncidentCreate,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[UserContext] = Depends(get_current_user),
 ) -> Incident:
     incident = Incident(
         title=payload.title,
@@ -58,6 +64,7 @@ async def create_incident(
         severity=payload.severity,
         incident_type=payload.incident_type,
         status="created",
+        org_id=user.org_id if user else None,
     )
     db.add(incident)
     await db.flush()
@@ -67,21 +74,23 @@ async def create_incident(
 
 
 @router.get("/stats")
-async def get_stats(db: AsyncSession = Depends(get_db)) -> dict:
-    result = await db.execute(select(Incident))
+async def get_stats(
+    db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    if not user.org_id:
+        return {"total": 0, "open": 0, "resolved": 0, "critical": 0}
+    
+    query = select(Incident).where(Incident.org_id == user.org_id)
+    result = await db.execute(query)
     all_incidents = list(result.scalars().all())
     return {
         "total": len(all_incidents),
         "open": sum(
-            1 for i in all_incidents
-            if i.status not in ("resolved", "failed")
+            1 for i in all_incidents if i.status not in ("resolved", "failed")
         ),
-        "resolved": sum(
-            1 for i in all_incidents if i.status == "resolved"
-        ),
-        "critical": sum(
-            1 for i in all_incidents if i.severity == "critical"
-        ),
+        "resolved": sum(1 for i in all_incidents if i.status == "resolved"),
+        "critical": sum(1 for i in all_incidents if i.severity == "critical"),
     }
 
 
@@ -92,28 +101,39 @@ async def list_incidents(
     connector_id: str | None = None,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> list[Incident]:
-    query = (
-        select(Incident)
-        .order_by(Incident.created_at.desc())
-        .limit(limit)
-    )
+    if not user.org_id:
+        return []
+    
+    query = select(Incident).order_by(Incident.created_at.desc()).limit(limit)
+    query = query.where(Incident.org_id == user.org_id)
+
     if status:
         query = query.where(Incident.status == status)
     if severity:
         query = query.where(Incident.severity == severity)
     if connector_id:
         query = query.where(Incident.connector_id == connector_id)
+
     result = await db.execute(query)
     return list(result.scalars().all())
 
 
 @router.get("/{incident_id}", response_model=IncidentResponse)
 async def get_incident(
-    incident_id: str, db: AsyncSession = Depends(get_db)
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> Incident:
+    if not user.org_id:
+        raise HTTPException(status_code=403, detail="Organization membership required")
+    
     result = await db.execute(
-        select(Incident).where(Incident.id == incident_id)
+        select(Incident).where(
+            Incident.id == incident_id,
+            Incident.org_id == user.org_id,
+        )
     )
     incident = result.scalar_one_or_none()
     if not incident:
@@ -123,11 +143,19 @@ async def get_incident(
 
 @router.post("/{incident_id}/start")
 async def start_investigation(
-    incident_id: str, db: AsyncSession = Depends(get_db)
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Start a TrueForge investigation session for an incident."""
+    if not user.org_id:
+        raise HTTPException(status_code=403, detail="Organization membership required")
+    
     result = await db.execute(
-        select(Incident).where(Incident.id == incident_id)
+        select(Incident).where(
+            Incident.id == incident_id,
+            Incident.org_id == user.org_id,
+        )
     )
     incident = result.scalar_one_or_none()
     if not incident:
@@ -275,6 +303,36 @@ async def _run_trueforge_investigation(
                         "type": "mcp.connected",
                         "data": {"servers": names},
                     })
+
+                elif event_type == "tool.approval_needed":
+                    tool_name = event.get("tool_name", "unknown")
+                    risk_level = event.get("risk_level", "HIGH")
+                    description = event.get("description", "")
+                    approval_reason = (
+                        f"Risk level {risk_level} requires human approval. "
+                        f"Action: {tool_name}"
+                        + (f" — {description}" if description else "")
+                    )
+                    async with async_session_factory() as db:
+                        async with db.begin():
+                            res = await db.execute(
+                                select(Incident).where(Incident.id == incident_id)
+                            )
+                            inc = res.scalar_one_or_none()
+                            if inc:
+                                inc.status = "awaiting_approval"
+                                inc.approval_reason = approval_reason
+                    await publish_event(incident_id, {
+                        "type": "approval.required",
+                        "data": {
+                            "tool_name": tool_name,
+                            "risk_level": risk_level,
+                            "approval_reason": approval_reason,
+                            "session_id": session_id,
+                            "turn_id": turn_id,
+                        },
+                    })
+                    return
 
             try:
                 turn_info = await tf.client.get_turn(session_id, turn_id)
@@ -895,13 +953,20 @@ async def handle_approval(
     incident_id: str,
     payload: ApprovalRequest,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Approve or reject a remediation plan.
 
     Bug 8 fix: Schedule remediation task on approval.
     """
+    if not user.org_id:
+        raise HTTPException(status_code=403, detail="Organization membership required")
+    
     result = await db.execute(
-        select(Incident).where(Incident.id == incident_id)
+        select(Incident).where(
+            Incident.id == incident_id,
+            Incident.org_id == user.org_id,
+        )
     )
     incident = result.scalar_one_or_none()
     if not incident:
