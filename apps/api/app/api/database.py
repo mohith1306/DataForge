@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/database", tags=["database"])
 
@@ -23,7 +23,7 @@ class SchemaMappingInput(BaseModel):
 class SetupResponse(BaseModel):
     status: str
     message: str
-    schema: dict
+    schema_info: dict = Field(alias="schema_name")
     create_table_sql: dict[str, str]
     env_vars: dict[str, str]
     test_queries: dict[str, str]

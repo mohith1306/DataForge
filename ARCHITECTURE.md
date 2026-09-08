@@ -76,22 +76,76 @@ dataforge/
 │   ├── api/                    # FastAPI backend
 │   │   └── app/
 │   │       ├── api/            # Route handlers
-│   │       │   ├── incidents.py    # Incident CRUD + investigation
-│   │       │   ├── connectors.py   # Database connector lifecycle
-│   │       │   ├── database.py     # Schema setup wizard
-│   │       │   ├── chaos.py        # Chaos injection triggers
-│   │       │   ├── monitor.py      # Background monitor API
-│   │       │   ├── events.py       # Incident event history
-│   │       │   ├── stream.py       # SSE streaming endpoints
-│   │       │   └── health.py       # Health check
+│   │       │   ├── incidents.py        # Incident CRUD + investigation
+│   │       │   ├── connectors.py       # Database connector lifecycle
+│   │       │   ├── database.py         # Schema setup wizard
+│   │       │   ├── chaos.py            # Chaos injection triggers
+│   │       │   ├── monitor.py          # Background monitor API
+│   │       │   ├── events.py           # Incident event history
+│   │       │   ├── stream.py           # SSE streaming endpoints
+│   │       │   ├── health.py           # Health check
+│   │       │   ├── auth.py             # API key authentication
+│   │       │   ├── ai.py               # AI agents + policy endpoints
+│   │       │   ├── reliability_graph.py # Reliability graph API
+│   │       │   ├── metadata.py         # Schema discovery + lineage
+│   │       │   └── intelligence.py     # Correlation + dedup + blast radius
+│   │       ├── agents/          # AI Agent system
+│   │       │   ├── base.py             # Base agent class
+│   │       │   ├── specialized.py      # 5 specialized agents
+│   │       │   └── orchestrator.py     # Agent orchestration
+│   │       ├── execution/       # Execution fabric
+│   │       │   ├── base.py             # Base executor
+│   │       │   ├── executors.py        # 6 executor types
+│   │       │   ├── fabric.py           # Execution fabric
+│   │       │   ├── verification.py     # 5-level verification
+│   │       │   └── memory.py           # Incident memory + failure DNA
+│   │       ├── metadata/        # Metadata engine
+│   │       │   ├── schema_discovery.py # Auto schema detection
+│   │       │   └── lineage.py          # Data lineage tracking
+│   │       ├── intelligence/    # Incident intelligence
+│   │       │   ├── correlation.py      # Incident correlation
+│   │       │   ├── deduplication.py    # Duplicate detection
+│   │       │   └── blast_radius.py     # Impact analysis
+│   │       ├── gateway/         # API gateway
+│   │       │   ├── rate_limiter.py     # Rate limiting
+│   │       │   ├── request_validator.py # Request validation
+│   │       │   ├── audit_logger.py     # Audit logging
+│   │       │   └── middleware.py       # FastAPI middleware
 │   │       ├── core/
-│   │       │   ├── config.py       # Settings (env-driven)
-│   │       │   └── logging.py      # Structured logging
+│   │       │   ├── config.py           # Settings (env-driven)
+│   │       │   ├── logging.py          # Structured logging
+│   │       │   ├── auth.py             # Authentication + API keys
+│   │       │   ├── tenant.py           # Multi-tenancy context
+│   │       │   ├── multi_tenancy.py    # Tenant middleware
+│   │       │   ├── policy_engine.py    # Policy engine
+│   │       │   └── risk_classifier.py  # Risk classification
 │   │       ├── db/
-│   │       │   ├── models.py       # SQLAlchemy ORM models
-│   │       │   └── session.py      # Engine, migrations, get_db
+│   │       │   ├── models.py           # SQLAlchemy ORM models
+│   │       │   ├── session.py          # Engine, migrations
+│   │       │   └── migrations/         # SQL migrations
 │   │       ├── schemas/
-│   │       │   └── incident.py     # Pydantic request/response models
+│   │       │   ├── incident.py         # Pydantic models
+│   │       │   └── reliability_graph.py # Graph schemas
+│   │       ├── services/
+│   │       │   ├── monitor.py          # Background monitor
+│   │       │   ├── reliability_graph.py # Graph service
+│   │       │   └── connectors/         # Database connectors
+│   │       └── main.py                 # FastAPI app
+│   └── web/                    # React frontend
+├── tests/                      # Test suite
+│   ├── test_auth.py            # Phase 1: Auth (4 tests)
+│   ├── test_reliability_graph.py # Phase 1: Graph (10 tests)
+│   ├── test_agents.py          # Phase 2: Agents (11 tests)
+│   ├── test_policy.py          # Phase 2: Policy (15 tests)
+│   ├── test_execution.py       # Phase 3: Execution (12 tests)
+│   ├── test_verification.py    # Phase 3: Verification (10 tests)
+│   ├── test_memory.py          # Phase 3: Memory (11 tests)
+│   ├── test_metadata.py        # Phase 4: Metadata (11 tests)
+│   ├── test_intelligence.py    # Phase 4: Intelligence (14 tests)
+│   └── test_gateway.py         # Phase 5: Gateway (26 tests)
+└── docs/                       # Documentation
+    └── ENTERPRISE_API.md       # Enterprise API reference
+```
 │   │       └── services/
 │   │           ├── monitor.py          # Background anomaly detection
 │   │           ├── db_adapter.py       # Database adapter abstraction
