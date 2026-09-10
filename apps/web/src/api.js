@@ -6,15 +6,29 @@ function getApiKey() {
   return localStorage.getItem('dataforge_api_key');
 }
 
+function getDevToken() {
+  return localStorage.getItem('dataforge_dev_token');
+}
+
 function getHeaders(includeContentType = true) {
   const headers = {};
   if (includeContentType) {
     headers['Content-Type'] = 'application/json';
   }
+  
+  // Check for API key first
   const apiKey = getApiKey();
   if (apiKey) {
     headers['X-API-Key'] = apiKey;
+    return headers;
   }
+  
+  // Check for dev token
+  const devToken = getDevToken();
+  if (devToken) {
+    headers['Authorization'] = `Bearer ${devToken}`;
+  }
+  
   return headers;
 }
 
