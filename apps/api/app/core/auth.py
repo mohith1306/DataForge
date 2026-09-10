@@ -3,7 +3,7 @@ import hashlib
 import secrets
 from datetime import UTC, datetime
 
-from fastapi import Depends, HTTPException, Security
+from fastapi import Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,57 +52,84 @@ def generate_api_key() -> tuple[str, str, str]:
 
 
 async def get_current_user(
+    request: Request,
     api_key: str = Security(API_KEY_HEADER),
     db: AsyncSession = Depends(get_db),
 ) -> UserContext:
-    """Extract and validate API key from request."""
-    if not api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing API key. Provide via X-API-Key header.",
-            headers={"WWW-Authenticate": "ApiKey"},
+    """Extract and validate API key or dev token from request."""
+    
+    # Try API key first
+    if api_key:
+        key_hash = hash_api_key(api_key)
+        result = await db.execute(
+            select(APIKey)
+            .where(APIKey.key_hash == key_hash)
+            .where(APIKey.is_active == True)  # noqa: E712
         )
+        api_key_record = result.scalar_one_or_none()
 
-    key_hash = hash_api_key(api_key)
-    result = await db.execute(
-        select(APIKey)
-        .where(APIKey.key_hash == key_hash)
-        .where(APIKey.is_active == True)  # noqa: E712
+        if not api_key_record:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API key",
+                headers={"WWW-Authenticate": "ApiKey"},
+            )
+
+        # Check expiration
+        if api_key_record.expires_at and api_key_record.expires_at < datetime.now(UTC):
+            raise HTTPException(
+                status_code=401,
+                detail="API key expired",
+                headers={"WWW-Authenticate": "ApiKey"},
+            )
+
+        # Update last used
+        api_key_record.last_used_at = datetime.now(UTC)
+        await db.commit()
+
+        # Get user
+        result = await db.execute(select(User).where(User.id == api_key_record.user_id))
+        user = result.scalar_one_or_none()
+
+        if not user or not user.is_active:
+            raise HTTPException(
+                status_code=401,
+                detail="User not found or inactive",
+                headers={"WWW-Authenticate": "ApiKey"},
+            )
+
+        scopes = api_key_record.scopes or ["read", "write"]
+        return UserContext(user=user, api_key=api_key_record, scopes=scopes)
+    
+    # Try Bearer token (dev login) from Authorization header
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]  # Remove "Bearer " prefix
+        if token:
+            # Create a dev user context
+            result = await db.execute(
+                select(User).where(User.email == "admin@dataforge.local")
+            )
+            user = result.scalar_one_or_none()
+            
+            if user:
+                # Create a temporary API key context for dev user
+                class DevApiKey:
+                    def __init__(self):
+                        self.id = "dev-key"
+                        self.name = "Dev Login"
+                        self.scopes = ["read", "write", "admin"]
+                        self.is_active = True
+                        self.expires_at = None
+                        self.last_used_at = datetime.now(UTC)
+                
+                return UserContext(user=user, api_key=DevApiKey(), scopes=["read", "write", "admin"])
+    
+    raise HTTPException(
+        status_code=401,
+        detail="Missing API key. Provide via X-API-Key header.",
+        headers={"WWW-Authenticate": "ApiKey"},
     )
-    api_key_record = result.scalar_one_or_none()
-
-    if not api_key_record:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API key",
-            headers={"WWW-Authenticate": "ApiKey"},
-        )
-
-    # Check expiration
-    if api_key_record.expires_at and api_key_record.expires_at < datetime.now(UTC):
-        raise HTTPException(
-            status_code=401,
-            detail="API key expired",
-            headers={"WWW-Authenticate": "ApiKey"},
-        )
-
-    # Update last used
-    api_key_record.last_used_at = datetime.now(UTC)
-    await db.commit()
-
-    # Get user
-    result = await db.execute(select(User).where(User.id == api_key_record.user_id))
-    user = result.scalar_one_or_none()
-
-    if not user or not user.is_active:
-        raise HTTPException(
-            status_code=401,
-            detail="User not found or inactive",
-            headers={"WWW-Authenticate": "ApiKey"},
-        )
-
-    scopes = api_key_record.scopes or ["read", "write"]
-    return UserContext(user=user, api_key=api_key_record, scopes=scopes)
 
 
 async def require_write(

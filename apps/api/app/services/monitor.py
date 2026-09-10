@@ -80,6 +80,7 @@ async def _create_incident(
     severity: str,
     incident_type: str,
     connector_id: str | None = None,
+    org_id: str | None = None,
 ) -> str | None:
     """Insert an Incident + event row, return the incident id."""
     try:
@@ -92,6 +93,7 @@ async def _create_incident(
                     status="created",
                     incident_type=incident_type,
                     connector_id=connector_id,
+                    org_id=org_id,
                 )
                 db.add(inc)
                 await db.flush()
@@ -189,6 +191,7 @@ async def _monitor_loop(interval: int) -> None:
                     description=a["description"],
                     severity=a["severity"],
                     incident_type=a["type"],
+                    org_id=settings.default_org_id if hasattr(settings, 'default_org_id') else None,
                 )
                 if inc_id:
                     _incidents_created += 1

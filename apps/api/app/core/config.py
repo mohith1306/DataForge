@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Gap 9: Demo mode — remediation targets controlled/test resources
     dataforge_env: str = "demo"  # "demo" or "production"
 
+    # Default org_id for incidents created by monitor
+    default_org_id: str = "cdc7cdb7-8506-4faf-a93e-31bf1aa668a3"
+
     # Monitor database backend (clickhouse | postgres | custom)
     monitor_db_type: str = "clickhouse"
     monitor_db_url: str = ""          # For postgres: postgres://user:pass@host/db
