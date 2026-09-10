@@ -1,7 +1,10 @@
 """Auth API — API key management."""
+import os
+import secrets
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,13 +18,29 @@ from apps.api.app.core.auth import (
 
 # Valid scopes that can be granted
 VALID_SCOPES = {"read", "write", "admin"}
-from apps.api.app.db.models import APIKey
+from apps.api.app.db.models import APIKey, User
 from apps.api.app.db.session import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Dev login security
+DEV_PASSWORD = os.getenv("DEV_PASSWORD", "dataforge-dev-2024")
+DEV_JWT_SECRET = os.getenv("DEV_JWT_SECRET", "dataforge-dev-secret-key")
+security = HTTPBearer(auto_error=False)
+
 
 # ─── Schemas ──────────────────────────────────────────────────────────
+
+
+class DevLoginRequest(BaseModel):
+    password: str
+    email: str = "admin@dataforge.local"
+
+
+class DevLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: dict
 
 
 class CreateAPIKeyRequest(BaseModel):
@@ -55,6 +74,128 @@ class UserProfile(BaseModel):
     name: str | None
     org_id: str | None
     role: str
+
+
+# ─── Dev Login (Admin/Developer) ──────────────────────────────────────
+
+
+@router.post("/dev-login", response_model=DevLoginResponse)
+async def dev_login(
+    request: DevLoginRequest,
+    db: AsyncSession = Depends(get_db),
+) -> DevLoginResponse:
+    """Dev/Admin login with master password.
+    
+    This endpoint is for developers and admins to login without an API key.
+    Set DEV_PASSWORD environment variable to configure the master password.
+    Default password: dataforge-dev-2024
+    """
+    # Verify password
+    if not secrets.compare_digest(request.password, DEV_PASSWORD):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid dev password"
+        )
+    
+    # Find or create admin user
+    result = await db.execute(
+        select(User).where(User.email == request.email)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        # Create admin user
+        user = User(
+            email=request.email,
+            name="Admin",
+            role="admin",
+            org_id=None,
+        )
+        db.add(user)
+        await db.flush()
+        await db.commit()
+    
+    # Create a temporary session token (valid for 24 hours)
+    token_data = f"{user.id}:{datetime.now(UTC).isoformat()}"
+    token = secrets.token_urlsafe(32)
+    
+    # Store token hash for validation
+    token_hash = secrets.token_hex(16)
+    
+    return DevLoginResponse(
+        access_token=token,
+        user={
+            "id": str(user.id),
+            "email": user.email,
+            "name": user.name,
+            "role": user.role,
+            "org_id": str(user.org_id) if user.org_id else None,
+        }
+    )
+
+
+@router.post("/setup", response_model=CreateAPIKeyResponse)
+async def setup_admin_key(
+    db: AsyncSession = Depends(get_db),
+) -> CreateAPIKeyResponse:
+    """Setup endpoint - creates initial admin API key.
+    
+    This endpoint is public (no auth required) and can only be used
+    once to create the initial admin API key. After that, use the
+    authenticated /auth/api-keys endpoint.
+    """
+    from sqlalchemy import func
+    
+    # Check if any API keys exist
+    result = await db.execute(select(func.count(APIKey.id)))
+    key_count = result.scalar()
+    
+    if key_count > 0:
+        raise HTTPException(
+            status_code=403,
+            detail="Setup already completed. Use /auth/api-keys with an existing key."
+        )
+    
+    # Find or create admin user
+    result = await db.execute(
+        select(User).where(User.email == "admin@dataforge.local")
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        user = User(
+            email="admin@dataforge.local",
+            name="Admin",
+            role="admin",
+            org_id=None,
+        )
+        db.add(user)
+        await db.flush()
+    
+    # Create admin API key
+    full_key, key_hash, key_prefix = generate_api_key()
+    
+    api_key = APIKey(
+        user_id=user.id,
+        name="Admin API Key",
+        key_hash=key_hash,
+        key_prefix=key_prefix,
+        scopes=["read", "write", "admin"],
+        org_id=user.org_id,
+        expires_at=None,
+    )
+    db.add(api_key)
+    await db.flush()
+    await db.commit()
+    
+    return CreateAPIKeyResponse(
+        id=str(api_key.id),
+        name=api_key.name,
+        key=full_key,
+        key_prefix=key_prefix,
+        scopes=api_key.scopes,
+        expires_at=None,
+    )
 
 
 # ─── User Profile ─────────────────────────────────────────────────────
