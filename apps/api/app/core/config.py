@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # Default org_id for incidents created by monitor
     default_org_id: str = "cdc7cdb7-8506-4faf-a93e-31bf1aa668a3"
 
+    # CORS origins (comma-separated in env)
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+
     # Monitor database backend (clickhouse | postgres | custom)
     monitor_db_type: str = "clickhouse"
     monitor_db_url: str = ""          # For postgres: postgres://user:pass@host/db

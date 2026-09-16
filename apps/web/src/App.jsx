@@ -1,5 +1,7 @@
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import ErrorBoundary from './components/ErrorBoundary';
+import NotFound from './components/NotFound';
 import Dashboard from './pages/Dashboard';
 import IncidentDetail from './pages/IncidentDetail';
 import ChaosLab from './pages/ChaosLab';
@@ -110,6 +112,7 @@ function AppRoutes() {
             <ChaosLab />
           </ProtectedRoute>
         } />
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </>
   );
@@ -118,11 +121,13 @@ function AppRoutes() {
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <div className="app">
-          <AppRoutes />
-        </div>
-      </AuthProvider>
+      <ErrorBoundary>
+        <AuthProvider>
+          <div className="app">
+            <AppRoutes />
+          </div>
+        </AuthProvider>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }

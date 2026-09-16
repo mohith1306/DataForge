@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.app.api.stream import publish_event
+from apps.api.app.api.utils import incident_to_dict, set_incident_status
 from apps.api.app.core.auth import UserContext, get_current_user
 from apps.api.app.core.config import settings
 from apps.api.app.db.models import Incident, IncidentEvent
@@ -36,20 +37,6 @@ def _get_trueforge() -> TrueForgeRuntime:
             model_name=settings.model_name,
         )
     return _trueforge
-
-
-def _incident_to_dict(inc: Incident) -> dict:
-    return {
-        "id": str(inc.id),
-        "title": inc.title,
-        "severity": inc.severity,
-        "status": inc.status,
-        "incident_type": inc.incident_type,
-        "connector_id": inc.connector_id,
-        "trueforge_session_id": inc.trueforge_session_id,
-        "approval_reason": inc.approval_reason,
-        "verification_result": inc.verification_result,
-    }
 
 
 @router.post("/", response_model=IncidentResponse, status_code=201)
@@ -180,7 +167,7 @@ async def start_investigation(
 
     await publish_event(str(incident_id), {
         "type": "incident.updated",
-        "data": _incident_to_dict(incident),
+        "data": incident_to_dict(incident),
     })
 
     if not settings.trueforge_enabled:
@@ -406,7 +393,7 @@ async def _run_trueforge_investigation(
                                     continue
                                 except Exception:
                                     pass
-                        await _set_incident_status(incident_id, "failed")
+                        await set_incident_status(incident_id, "failed")
                         await publish_event(incident_id, {
                             "type": "investigation.error",
                             "data": {"message": error_msg},
@@ -414,7 +401,7 @@ async def _run_trueforge_investigation(
                     else:
                         output = turn_data.get("state", {}).get("output", {})
                         content = output.get("content", "") if isinstance(output, dict) else ""
-                        await _set_incident_status(incident_id, "investigation_complete")
+                        await set_incident_status(incident_id, "investigation_complete")
                         await publish_event(incident_id, {
                             "type": "investigation.completed",
                             "data": {
@@ -431,7 +418,7 @@ async def _run_trueforge_investigation(
                 poll_interval = 2.0
 
         elapsed = int(asyncio.get_event_loop().time() - start_time)
-        await _set_incident_status(incident_id, "failed")
+        await set_incident_status(incident_id, "failed")
         await publish_event(incident_id, {
             "type": "investigation.error",
             "data": {"message": f"Investigation timed out after {elapsed}s"},
@@ -439,33 +426,18 @@ async def _run_trueforge_investigation(
 
     except Exception as e:
         logger.error(f"Investigation failed: {e}", exc_info=True)
-        await _set_incident_status(incident_id, "failed")
+        await set_incident_status(incident_id, "failed")
         await publish_event(incident_id, {
             "type": "investigation.error",
             "data": {"message": str(e)},
         })
 
 
-async def _set_incident_status(
-    incident_id: str, status: str
-) -> None:
-    """Update incident status using a dedicated DB session."""
-    try:
-        async with async_session_factory() as db:
-            async with db.begin():
-                res = await db.execute(
-                    select(Incident).where(Incident.id == incident_id)
-                )
-                inc = res.scalar_one_or_none()
-                if inc:
-                    inc.status = status
-    except Exception as e:
-        logger.error(f"Failed to update {incident_id}: {e}")
-
-
 @router.post("/{incident_id}/remediate")
 async def execute_remediation(
-    incident_id: str, db: AsyncSession = Depends(get_db)
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Execute remediation — REQUIRES prior human approval.
 
@@ -473,8 +445,14 @@ async def execute_remediation(
     Incidents in 'awaiting_approval' must go through the /approval endpoint first.
     This prevents bypassing the human approval gate.
     """
+    if not user.org_id:
+        raise HTTPException(status_code=403, detail="Organization membership required")
+    
     result = await db.execute(
-        select(Incident).where(Incident.id == incident_id)
+        select(Incident).where(
+            Incident.id == incident_id,
+            Incident.org_id == user.org_id,
+        )
     )
     incident = result.scalar_one_or_none()
     if not incident:
@@ -506,7 +484,7 @@ async def execute_remediation(
 
     await publish_event(str(incident_id), {
         "type": "incident.updated",
-        "data": _incident_to_dict(incident),
+        "data": incident_to_dict(incident),
     })
 
     asyncio.create_task(_execute_and_verify_remediation(
@@ -573,7 +551,7 @@ async def _execute_and_verify_remediation(
             remediation_succeeded = False
     elif not settings.trueforge_enabled:
         # No TrueForge — skip remediation, mark as failed
-        await _set_incident_status(incident_id, "failed")
+        await set_incident_status(incident_id, "failed")
         await publish_event(incident_id, {
             "type": "remediation.error",
             "data": {"message": "TrueForge disabled — cannot remediate"},
@@ -582,7 +560,7 @@ async def _execute_and_verify_remediation(
 
     # Bug 3: If remediation failed, do NOT proceed to verification
     if not remediation_succeeded:
-        await _set_incident_status(incident_id, "failed")
+        await set_incident_status(incident_id, "failed")
         await publish_event(incident_id, {
             "type": "remediation.error",
             "data": {"message": "Remediation failed — not verifying"},
@@ -609,13 +587,13 @@ async def _execute_and_verify_remediation(
                 inc.verification_result = json.dumps(verification)
 
     if verification["resolved"]:
-        await _set_incident_status(incident_id, "resolved")
+        await set_incident_status(incident_id, "resolved")
         await publish_event(incident_id, {
             "type": "verification.passed",
             "data": verification,
         })
     else:
-        await _set_incident_status(
+        await set_incident_status(
             incident_id, "investigation_complete"
         )
         await publish_event(incident_id, {
@@ -1001,7 +979,7 @@ async def handle_approval(
 
     await publish_event(str(incident_id), {
         "type": "incident.updated",
-        "data": _incident_to_dict(incident),
+        "data": incident_to_dict(incident),
     })
 
     # Forward to TrueForge if session provided

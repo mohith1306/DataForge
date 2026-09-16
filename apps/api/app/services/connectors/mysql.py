@@ -20,11 +20,12 @@ class MySQLConnector(DatabaseConnector):
     async def connect(self) -> bool:
         try:
             import aiomysql
+            password = await self.config.resolve_password()
             self._pool = await aiomysql.create_pool(
                 host=self.config.host,
                 port=self.config.port or 3306,
                 user=self.config.username,
-                password=self.config.password,
+                password=password,
                 db=self.config.database,
                 minsize=1,
                 maxsize=5,

@@ -21,6 +21,8 @@ class SnowflakeConnector(DatabaseConnector):
         try:
             import snowflake.connector
 
+            password = await self.config.resolve_password()
+
             # Strip .snowflakecomputing.com from account if user provided full URL
             account = self.config.host
             if ".snowflakecomputing.com" in account:
@@ -29,7 +31,7 @@ class SnowflakeConnector(DatabaseConnector):
             self._connection = snowflake.connector.connect(
                 account=account,
                 user=self.config.username,
-                password=self.config.password,
+                password=password,
                 database=self.config.database,
                 schema=self.config.schema or "PUBLIC",
                 warehouse=self.config.extra.get("warehouse", "COMPUTE_WH"),

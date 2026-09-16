@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.app.api.stream import publish_event
+from apps.api.app.api.utils import incident_to_dict, set_incident_status
 from apps.api.app.core.config import settings
 from apps.api.app.db.models import Incident, IncidentEvent
 from apps.api.app.db.session import async_session_factory, get_db
@@ -59,16 +60,6 @@ FAULT_SEVERITY = {
 }
 
 
-def _incident_to_dict(inc: Incident) -> dict:
-    return {
-        "id": str(inc.id),
-        "title": inc.title,
-        "severity": inc.severity,
-        "status": inc.status,
-        "incident_type": inc.incident_type,
-    }
-
-
 @router.post("/{fault_type}", response_model=ChaosResponse)
 async def inject_fault(
     fault_type: str,
@@ -113,7 +104,7 @@ async def inject_fault(
     await db.commit()
 
     # Publish SSE events
-    incident_data = _incident_to_dict(incident)
+    incident_data = incident_to_dict(incident)
     await publish_event(str(incident.id), {
         "type": "incident.updated",
         "data": incident_data,
@@ -332,7 +323,7 @@ async def _start_trueforge_investigation(
                                     continue
                                 except Exception:
                                     pass
-                        await _set_incident_status(incident_id, "failed")
+                        await set_incident_status(incident_id, "failed")
                         await publish_event(incident_id, {
                             "type": "investigation.error",
                             "data": {"message": error_msg},
@@ -340,7 +331,7 @@ async def _start_trueforge_investigation(
                     else:
                         output = turn_data.get("state", {}).get("output", {})
                         content = output.get("content", "") if isinstance(output, dict) else ""
-                        await _set_incident_status(incident_id, "investigation_complete")
+                        await set_incident_status(incident_id, "investigation_complete")
                         await publish_event(incident_id, {
                             "type": "investigation.completed",
                             "data": {
@@ -359,31 +350,15 @@ async def _start_trueforge_investigation(
 
         # Timeout
         elapsed = int(asyncio.get_event_loop().time() - start_time)
-        await _set_incident_status(incident_id, "failed")
+        await set_incident_status(incident_id, "failed")
         await publish_event(incident_id, {
             "type": "investigation.error",
             "data": {"message": f"Investigation timed out after {elapsed}s"},
         })
 
     except Exception as e:
-        await _set_incident_status(incident_id, "failed")
+        await set_incident_status(incident_id, "failed")
         await publish_event(incident_id, {
             "type": "investigation.error",
             "data": {"message": str(e)},
         })
-
-
-async def _set_incident_status(incident_id: str, status: str) -> None:
-    """Update incident status using a dedicated DB session."""
-    try:
-        async with async_session_factory() as db:
-            async with db.begin():
-                from sqlalchemy import select
-                res = await db.execute(
-                    select(Incident).where(Incident.id == incident_id)
-                )
-                inc = res.scalar_one_or_none()
-                if inc:
-                    inc.status = status
-    except Exception:
-        pass

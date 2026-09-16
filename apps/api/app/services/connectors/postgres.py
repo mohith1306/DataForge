@@ -17,18 +17,19 @@ class PostgresConnector(DatabaseConnector):
         super().__init__(config)
         self._pool = None
 
-    @property
-    def dsn(self) -> str:
+    async def _build_dsn(self) -> str:
+        password = await self.config.resolve_password()
         return (
-            f"postgresql://{self.config.username}:{self.config.password}"
+            f"postgresql://{self.config.username}:{password}"
             f"@{self.config.host}:{self.config.port}/{self.config.database}"
         )
 
     async def connect(self) -> bool:
         try:
             import asyncpg
+            dsn = await self._build_dsn()
             self._pool = await asyncpg.create_pool(
-                self.dsn,
+                dsn,
                 min_size=1,
                 max_size=5,
                 command_timeout=10,
