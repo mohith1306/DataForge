@@ -18,6 +18,7 @@ from apps.api.app.api.intelligence import router as intelligence_router
 from apps.api.app.api.metadata import router as metadata_router
 from apps.api.app.api.monitor import router as monitor_router
 from apps.api.app.api.reliability_graph import router as graph_router
+from apps.api.app.api.safe_execution import router as safe_execution_router
 from apps.api.app.api.stream import router as stream_router
 from apps.api.app.core.auth import get_current_user
 from apps.api.app.core.config import settings
@@ -113,6 +114,9 @@ app.include_router(graph_ingestion_router, prefix="/api")
 
 # Phase 9: Golden Path — Schema Drift & Pipeline Failure
 app.include_router(golden_path_router, prefix="/api")
+
+# Phase 10: Safe Autonomous Remediation
+app.include_router(safe_execution_router, prefix="/api")
 
 
 @app.get("/")
