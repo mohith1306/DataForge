@@ -9,6 +9,7 @@ from apps.api.app.api.ai import router as ai_router
 from apps.api.app.api.chaos import router as chaos_router
 from apps.api.app.api.connectors import router as connectors_router
 from apps.api.app.api.database import router as database_router
+from apps.api.app.api.design_partner import router as design_partner_router
 from apps.api.app.api.e6data import router as e6data_router
 from apps.api.app.api.events import router as events_router
 from apps.api.app.api.graph_ingestion import router as graph_ingestion_router
@@ -121,6 +122,9 @@ app.include_router(safe_execution_router, prefix="/api")
 
 # Phase 11: e6data Integration & Agentic Data Plane
 app.include_router(e6data_router, prefix="/api")
+
+# Phase 13: Design Partner Program
+app.include_router(design_partner_router, prefix="/api")
 
 
 @app.get("/")
