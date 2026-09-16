@@ -212,3 +212,50 @@ class GraphVersion(Base):
     snapshot = Column(JSONB, default=dict)
     change_description = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ─── Schema Drift & Golden Path ───────────────────────────────────────
+
+
+class SchemaSnapshot(Base):
+    """Point-in-time schema snapshot for drift detection."""
+
+    __tablename__ = "schema_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    connector_id = Column(String(100), nullable=False)
+    table_name = Column(String(500), nullable=False)
+    schema_def = Column(JSONB, nullable=False)
+    column_count = Column(Float)
+    content_hash = Column(String(64))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class RemediationPlan(Base):
+    """Structured remediation plan for incidents."""
+
+    __tablename__ = "remediation_plans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    incident_id = Column(UUID(as_uuid=True), nullable=False)
+    org_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status = Column(String(30), default="draft")
+    risk_level = Column(String(20), default="medium")
+    requires_approval = Column(Boolean, default=True)
+    actions = Column(JSONB, default=list)
+    rollback_plan = Column(JSONB, default=list)
+    verification_criteria = Column(JSONB, default=list)
+    approved_by = Column(String(100))
+    approved_at = Column(DateTime(timezone=True))
+    executed_at = Column(DateTime(timezone=True))
+    verified_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
