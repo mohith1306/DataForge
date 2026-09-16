@@ -10,6 +10,7 @@ from apps.api.app.api.chaos import router as chaos_router
 from apps.api.app.api.connectors import router as connectors_router
 from apps.api.app.api.database import router as database_router
 from apps.api.app.api.events import router as events_router
+from apps.api.app.api.graph_ingestion import router as graph_ingestion_router
 from apps.api.app.api.health import router as health_router
 from apps.api.app.api.incidents import router as incidents_router
 from apps.api.app.api.intelligence import router as intelligence_router
@@ -106,9 +107,8 @@ app.include_router(connectors_router, prefix="/api", dependencies=[Depends(get_c
 app.include_router(metadata_router, prefix="/api")
 app.include_router(intelligence_router, prefix="/api")
 
-# Phase 4: Metadata and Intelligence routers
-app.include_router(metadata_router, prefix="/api")
-app.include_router(intelligence_router, prefix="/api")
+# Phase 8: Graph Ingestion, Lineage, and Versioning
+app.include_router(graph_ingestion_router, prefix="/api")
 
 
 @app.get("/")

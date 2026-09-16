@@ -162,6 +162,18 @@ def upgrade() -> None:
         sa.Column("resolved_at", sa.DateTime(timezone=True)),
     )
 
+    # Graph Versions
+    op.create_table(
+        "graph_versions",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("version_number", sa.String(50), nullable=False),
+        sa.Column("content_hash", sa.String(64), nullable=False),
+        sa.Column("snapshot", postgresql.JSONB(), server_default="{}"),
+        sa.Column("change_description", sa.Text()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+    )
+
     # Indexes
     op.create_index("idx_incidents_org_id", "incidents", ["org_id"])
     op.create_index("idx_incidents_status", "incidents", ["status"])
@@ -174,9 +186,11 @@ def upgrade() -> None:
     op.create_index("idx_reliability_edges_target_id", "reliability_edges", ["target_id"])
     op.create_index("idx_api_keys_user_id", "api_keys", ["user_id"])
     op.create_index("idx_api_keys_key_hash", "api_keys", ["key_hash"])
+    op.create_index("idx_graph_versions_org_id", "graph_versions", ["org_id"])
 
 
 def downgrade() -> None:
+    op.drop_table("graph_versions")
     op.drop_table("incident_approvals")
     op.drop_table("incident_evidence")
     op.drop_table("incident_events")

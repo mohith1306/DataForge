@@ -193,3 +193,22 @@ class IncidentApproval(Base):
     reason = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     resolved_at = Column(DateTime(timezone=True))
+
+
+# ─── Graph Versioning ───────────────────────────────────────────────
+
+
+class GraphVersion(Base):
+    __tablename__ = "graph_versions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version_number = Column(String(50), nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    snapshot = Column(JSONB, default=dict)
+    change_description = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
