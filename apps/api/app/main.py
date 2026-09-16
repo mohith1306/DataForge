@@ -48,6 +48,9 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     # Stop all connector monitoring
     for conn in registry.list_connectors():
         await registry.stop_monitoring(conn["id"])
+    # Dispose engine connection pool
+    from apps.api.app.db.session import engine
+    await engine.dispose()
 
 
 app = FastAPI(
@@ -62,7 +65,7 @@ app.add_middleware(TenantMiddleware)
 app.add_middleware(GatewayMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -85,10 +88,18 @@ app.include_router(ai_router, prefix="/api")
 app.include_router(incidents_router, prefix="/api")
 app.include_router(events_router, prefix="/api")
 app.include_router(stream_router, prefix="/api")
-app.include_router(chaos_router, prefix="/api")
-app.include_router(monitor_router, prefix="/api")
-app.include_router(database_router, prefix="/api")
-# Bug #18 fix: Add auth dependency to connectors router
+app.include_router(
+    chaos_router, prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    monitor_router, prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    database_router, prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
 app.include_router(connectors_router, prefix="/api", dependencies=[Depends(get_current_user)])
 
 # Phase 4: Metadata and Intelligence routers

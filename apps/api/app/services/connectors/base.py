@@ -38,11 +38,25 @@ class ConnectorConfig:
     database: str = ""
     username: str = ""
     password: str = ""  # stored encrypted in production
+    password_secret_ref: str = ""  # env var name or secret key (takes precedence over password)
     schema: str = "public"
     extra: dict[str, str] = field(default_factory=dict)  # driver-specific options
     enabled: bool = True
     poll_interval: int = 30  # seconds between monitoring checks
     discovered_tables: list[dict] = field(default_factory=list)
+
+    async def resolve_password(self) -> str:
+        """Resolve the password from secret ref or direct value."""
+        if self.password_secret_ref:
+            from apps.api.app.services.secrets import get_secrets_provider
+            provider = get_secrets_provider()
+            resolved = await provider.get_secret(self.password_secret_ref)
+            if resolved:
+                return resolved
+            raise ValueError(
+                f"Secret '{self.password_secret_ref}' not found in secrets provider"
+            )
+        return self.password
 
 
 class DatabaseConnector(ABC):

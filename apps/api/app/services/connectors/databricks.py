@@ -35,10 +35,20 @@ class DatabricksConnector(DatabaseConnector):
         self._token = config.extra.get("token", config.password)
         self._http_path = config.extra.get("http_path", "")
 
-    @property
-    def _headers(self) -> dict:
+    async def _resolve_token(self) -> str:
+        """Resolve the access token from secret ref or direct value."""
+        if self.config.password_secret_ref:
+            from apps.api.app.services.secrets import get_secrets_provider
+            provider = get_secrets_provider()
+            resolved = await provider.get_secret(self.config.password_secret_ref)
+            if resolved:
+                return resolved
+        return self.config.extra.get("token", self.config.password)
+
+    async def _headers(self) -> dict:
+        token = await self._resolve_token()
         return {
-            "Authorization": f"Bearer {self._token}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
 
@@ -46,10 +56,11 @@ class DatabricksConnector(DatabaseConnector):
         try:
             url = f"{self._host}/api/2.0/sql/statements/"
             logger.info("Connecting to Databricks: %s", url)
+            headers = await self._headers()
             async with httpx.AsyncClient(timeout=30, verify=True) as client:
                 resp = await client.post(
                     url,
-                    headers=self._headers,
+                    headers=headers,
                     json={
                         "statement": "SELECT 1",
                         "warehouse_id": self._http_path.split("/")[-1] if self._http_path else "",
@@ -88,10 +99,11 @@ class DatabricksConnector(DatabaseConnector):
         pass  # HTTP, no persistent connection
 
     async def _query(self, sql: str) -> list[dict]:
+        headers = await self._headers()
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 f"{self._host}/api/2.0/sql/statements/",
-                headers=self._headers,
+                headers=headers,
                 json={
                     "statement": sql,
                     "warehouse_id": self._http_path.split("/")[-1] if self._http_path else "",

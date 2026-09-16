@@ -21,8 +21,9 @@ class TestGetRiskLevel:
     def test_select_is_low(self):
         assert get_risk_level("execute_select") == "LOW"
 
-    def test_unknown_tool_defaults_to_medium(self):
-        assert get_risk_level("unknown_tool") == "MEDIUM"
+    def test_unknown_tool_defaults_to_high(self):
+        """Unknown tools default to HIGH (conservative)."""
+        assert get_risk_level("unknown_tool") == "HIGH"
 
 
 class TestRequiresApproval:
@@ -66,6 +67,7 @@ class TestClassifyRemediationRisk:
     def test_empty_actions_is_low(self):
         assert classify_remediation_risk([]) == "LOW"
 
-    def test_unknown_tool_is_medium(self):
+    def test_unknown_tool_is_high(self):
+        """Unknown tools default to HIGH (conservative)."""
         actions = [{"tool": "unknown_tool", "parameters": {}}]
-        assert classify_remediation_risk(actions) == "MEDIUM"
+        assert classify_remediation_risk(actions) == "HIGH"
