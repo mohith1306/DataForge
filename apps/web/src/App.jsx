@@ -8,6 +8,7 @@ import ChaosLab from './pages/ChaosLab';
 import Connectors from './pages/Connectors';
 import DatabaseDetail from './pages/DatabaseDetail';
 import ReliabilityDashboard from './pages/ReliabilityDashboard';
+import IncidentMemory from './pages/IncidentMemory';
 import Login from './pages/Login';
 
 function NavLink({ to, children }) {
@@ -56,6 +57,7 @@ function AppNav() {
         <NavLink to="/">Databases</NavLink>
         <NavLink to="/dashboard">Dashboard</NavLink>
         <NavLink to="/reliability">Reliability</NavLink>
+        <NavLink to="/memory">Memory</NavLink>
         <NavLink to="/chaos">Chaos Lab</NavLink>
         {isAuthenticated && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginLeft: '1rem' }}>
@@ -112,6 +114,11 @@ function AppRoutes() {
         <Route path="/reliability" element={
           <ProtectedRoute>
             <ReliabilityDashboard />
+          </ProtectedRoute>
+        } />
+        <Route path="/memory" element={
+          <ProtectedRoute>
+            <IncidentMemory />
           </ProtectedRoute>
         } />
         <Route path="/chaos" element={

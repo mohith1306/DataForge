@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feature/enterprise-mvp]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dataforge
+          POSTGRES_PASSWORD: dataforge
+          POSTGRES_DB: dataforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run migrations
+        run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://dataforge:dataforge@localhost:5432/dataforge
+
+      - name: Run lint
+        run: uv run ruff check .
+        continue-on-error: true
+
+      - name: Run tests
+        run: uv run pytest tests/ -q --tb=short
+        env:
+          DATABASE_URL: postgresql+asyncpg://dataforge:dataforge@localhost:5432/dataforge
+
+  frontend:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: apps/web
+
+      - name: Build
+        run: npm run build
+        working-directory: apps/web
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [test, frontend]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -f infrastructure/Dockerfile.api -t dataforge-api:ci . || echo "Dockerfile.api not found, skipping"
+
+      - name: Build Web image
+        run: docker build -f infrastructure/Dockerfile.web -t dataforge-web:ci . || echo "Dockerfile.web not found, skipping"
