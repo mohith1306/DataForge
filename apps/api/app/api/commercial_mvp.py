@@ -34,7 +34,7 @@ from apps.api.app.services.change_intelligence import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/commercial", tags=["commercial-mvp"])
+router = APIRouter(prefix="/commercial", tags=["commercial-mvp"])
 
 product_manager = ProductManager()
 scorer = ReliabilityScorer()

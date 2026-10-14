@@ -329,7 +329,7 @@ class TestPolicyEngineIntegration:
 class TestPhase10APIImports:
     def test_safe_execution_router_imports(self):
         from apps.api.app.api.safe_execution import router
-        assert router.prefix == "/api/safe-execution"
+        assert router.prefix == "/safe-execution"
 
     def test_main_app_includes_safe_execution(self):
         from apps.api.app.api.safe_execution import router

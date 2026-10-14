@@ -268,7 +268,7 @@ class TestAgentFlowReliability:
 class TestPhase11APIImports:
     def test_e6data_router_imports(self):
         from apps.api.app.api.e6data import router
-        assert router.prefix == "/api/e6data"
+        assert router.prefix == "/e6data"
 
     def test_main_app_includes_e6data(self):
         from apps.api.app.api.e6data import router

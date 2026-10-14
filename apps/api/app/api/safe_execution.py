@@ -32,7 +32,7 @@ from apps.api.app.services.remediation_sandbox import RemediationSandbox
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/safe-execution", tags=["safe-execution"])
+router = APIRouter(prefix="/safe-execution", tags=["safe-execution"])
 
 # Shared instances
 policy_engine = PolicyEngine()

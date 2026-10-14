@@ -387,5 +387,5 @@ class TestPhase14APIImports:
 
     def test_main_app_includes_commercial(self):
         from apps.api.app.api.commercial_mvp import router
-        assert router.prefix == "/api/commercial"
+        assert router.prefix == "/commercial"
         assert any("tiers" in r.path for r in router.routes if hasattr(r, "path"))

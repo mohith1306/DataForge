@@ -35,7 +35,7 @@ from apps.api.app.services.schema_verifier import SchemaVerifier
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/golden-path", tags=["golden-path"])
+router = APIRouter(prefix="/golden-path", tags=["golden-path"])
 
 
 # ─── Request / Response Models ────────────────────────────────────────
@@ -104,6 +104,7 @@ async def detect_drift(
     )
 
     if drift is None:
+        await db.commit()
         return {
             "status": "no_drift",
             "message": "Schema matches the last snapshot. No drift detected.",

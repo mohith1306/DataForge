@@ -214,7 +214,7 @@ class TestKPITracker:
 class TestPhase13APIImports:
     def test_design_partner_router_imports(self):
         from apps.api.app.api.design_partner import router
-        assert router.prefix == "/api/design-partner"
+        assert router.prefix == "/design-partner"
 
     def test_main_app_includes_design_partner(self):
         from apps.api.app.api.design_partner import router

@@ -38,7 +38,7 @@ from apps.api.app.services.agentflow_reliability import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/e6data", tags=["e6data"])
+router = APIRouter(prefix="/e6data", tags=["e6data"])
 
 e6data_connector = E6DataConnector()
 agentflow = AgentFlowReliability()

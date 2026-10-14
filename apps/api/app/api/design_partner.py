@@ -27,7 +27,7 @@ from apps.api.app.services.kpi_tracker import KPITracker
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/design-partner", tags=["design-partner"])
+router = APIRouter(prefix="/design-partner", tags=["design-partner"])
 
 manager = DesignPartnerManager()
 kpi_tracker = KPITracker()
