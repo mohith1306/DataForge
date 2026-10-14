@@ -9,11 +9,17 @@ from httpx import ASGITransport, AsyncClient
 
 from apps.api.app.main import app
 
+API_KEY = "df_D7HhB2A1pynRLOo-6sRcRp565-8scSk2Rq67uDgKexI"
+
 
 @pytest.fixture
 async def client():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-API-Key": API_KEY},
+    ) as ac:
         yield ac
 
 
