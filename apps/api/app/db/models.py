@@ -259,3 +259,113 @@ class RemediationPlan(Base):
     executed_at = Column(DateTime(timezone=True))
     verified_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Subscription(Base):
+    """Product tier subscription for an organization."""
+
+    __tablename__ = "subscriptions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    tier = Column(String(30), default="observe")
+    started_at = Column(DateTime(timezone=True))
+    expires_at = Column(DateTime(timezone=True))
+    is_active = Column(Boolean, default=True)
+    extra_data = Column(JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ReliabilityScoreHistory(Base):
+    """Historical reliability score records per organization."""
+
+    __tablename__ = "reliability_score_history"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    overall_score = Column(Float, default=0.0)
+    grade = Column(String(5), default="F")
+    dimensions = Column(JSONB, default=dict)
+    recommendations = Column(JSONB, default=list)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentMemoryRecord(Base):
+    """Persistent incident memory with Failure DNA fingerprints."""
+
+    __tablename__ = "incident_memory_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    incident_id = Column(String(100), nullable=False)
+    title = Column(String(500), nullable=False)
+    description = Column(Text, default="")
+    severity = Column(String(20), default="medium")
+    category = Column(String(100), default="unknown")
+    root_cause = Column(Text, default="")
+    resolution = Column(Text, default="")
+    affected_services = Column(JSONB, default=list)
+    error_signatures = Column(JSONB, default=list)
+    failure_dna_hash = Column(String(64), default="")
+    failure_dna_fingerprint = Column(String(200), default="")
+    resolution_steps = Column(JSONB, default=list)
+    environment = Column(String(50), default="production")
+    prevention_tip = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChangeEvent(Base):
+    """Change events from GitHub, deployments, schema changes."""
+
+    __tablename__ = "change_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    change_id = Column(String(100), nullable=False)
+    change_type = Column(String(50), nullable=False)
+    description = Column(Text, default="")
+    author = Column(String(200), default="")
+    affected_resources = Column(JSONB, default=list)
+    risk_score = Column(Float, default=0.0)
+    extra_data = Column(JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class RiskPrediction(Base):
+    """Preventive risk predictions from change analysis."""
+
+    __tablename__ = "risk_predictions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    prediction_id = Column(String(100), nullable=False)
+    risk_level = Column(String(20), default="low")
+    probability = Column(Float, default=0.0)
+    confidence = Column(Float, default=0.0)
+    description = Column(Text, default="")
+    affected_resources = Column(JSONB, default=list)
+    preventive_actions = Column(JSONB, default=list)
+    change_id = Column(String(100), default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

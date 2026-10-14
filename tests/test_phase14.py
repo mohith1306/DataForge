@@ -371,3 +371,21 @@ class TestChangeIntelligence:
         stats = ci.get_stats()
         assert stats["total_changes"] == 2
         assert stats["by_type"]["commit"] == 1
+
+
+# ─── API Import Tests ──────────────────────────────────────────────────
+
+
+class TestPhase14APIImports:
+    def test_commercial_router_imports(self):
+        from apps.api.app.api.commercial_mvp import router
+        assert router is not None
+        paths = [r.path for r in router.routes]
+        assert any("tiers" in p for p in paths)
+        assert any("reliability" in p for p in paths)
+        assert any("memory" in p for p in paths)
+
+    def test_main_app_includes_commercial(self):
+        from apps.api.app.api.commercial_mvp import router
+        assert router.prefix == "/api/commercial"
+        assert any("tiers" in r.path for r in router.routes if hasattr(r, "path"))

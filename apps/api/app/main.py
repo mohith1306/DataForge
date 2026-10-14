@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from apps.api.app.api.auth import router as auth_router
 from apps.api.app.api.ai import router as ai_router
 from apps.api.app.api.chaos import router as chaos_router
+from apps.api.app.api.commercial_mvp import router as commercial_mvp_router
 from apps.api.app.api.connectors import router as connectors_router
 from apps.api.app.api.database import router as database_router
 from apps.api.app.api.design_partner import router as design_partner_router
@@ -125,6 +126,9 @@ app.include_router(e6data_router, prefix="/api")
 
 # Phase 13: Design Partner Program
 app.include_router(design_partner_router, prefix="/api")
+
+# Phase 14: Commercial MVP — Tiers, Reliability Score, Incident Memory, Change Intelligence
+app.include_router(commercial_mvp_router, prefix="/api")
 
 
 @app.get("/")
